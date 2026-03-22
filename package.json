@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "type": "module",
   "bin": { "purify": "purify.ts" },
+  "scripts": {
+    "dev": "node_modules/.bin/tsx purify.ts"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
     "aisp-validator": "^0.3.0",

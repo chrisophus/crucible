@@ -10,7 +10,7 @@ chmod +x purify.ts
 mkdir -p "$HOME/.local/bin"
 cat > "$HOME/.local/bin/purify" << 'WRAPPER'
 #!/bin/bash
-exec node --import tsx/esm "$HOME/.config/opencode/scripts/purify/purify.ts" "$@"
+exec "$HOME/.config/opencode/scripts/purify/node_modules/.bin/tsx" "$HOME/.config/opencode/scripts/purify/purify.ts" "$@"
 WRAPPER
 chmod +x "$HOME/.local/bin/purify"
 echo "purify installed. Make sure ~/.local/bin is in your PATH."

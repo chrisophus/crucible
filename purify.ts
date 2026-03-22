@@ -8,10 +8,11 @@
  *   cat spec.md | purify [options]
  *
  * Options:
- *   --provider   anthropic | openai          (default: anthropic)
- *   --model      main model (AISP→English)   (default: provider default)
- *   --purify-model  cheap model (En→AISP)    (default: haiku / gpt-4o-mini)
- *   --api-key    API key                     (default: env var)
+ *   --provider   anthropic | openai                        (default: anthropic)
+ *   --model      main model (AISP→English)                 (default: provider default)
+ *   --purify-model  cheap model (En→AISP)                  (default: haiku / gpt-4o-mini)
+ *   --mode       formal | narrative | hybrid | sketch | summary  (default: narrative)
+ *   --api-key    API key                                    (default: env var)
  *   --verbose    write AISP and scores to stderr
  *   --help
  *
@@ -36,6 +37,7 @@ import OpenAI from "openai"
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Provider = "anthropic" | "openai"
+type Mode = "formal" | "narrative" | "hybrid" | "sketch" | "summary"
 type ConvMessage = { role: "user" | "assistant"; content: string }
 
 interface Evidence {
@@ -173,23 +175,7 @@ EVIDENCE BLOCK — always include at the end:
 
 Output ONLY the AISP document. No markdown fences, no preamble.`
 
-const TO_ENGLISH_SYSTEM = `\
-You are translating an AISP 5.1 formal specification back to plain English.
-
-First check the evidence block (⟦Ε⟧) for the τ tier value.
-
-IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to clean English markdown:
-  - Invariants (⟦Ω⟧)   → declarative statements. ¬X = "never" or "must not".
-  - Types (⟦Σ⟧)         → definition tables, every value listed explicitly.
-  - Entities (⟦Γ⟧)      → field tables: Field | Type | Notes. Nullable = "nullable".
-  - Functions (⟦Λ⟧)     → per-case tables or numbered steps.
-  - Constraints (⟦Χ⟧)   → grouped bullets. Negations as "never", "must not".
-  - Preserve all code blocks exactly.
-  - Do not add rationale not in AISP source.
-  - No hedge words: never use "typically", "usually", "often", "generally".
-  - No preamble. Start with the first section heading.
-
+const NEEDS_CLARIFICATION_BLOCK = `\
 IF τ is ⊘:
   Do not translate. Output exactly:
 
@@ -200,15 +186,83 @@ IF τ is ⊘:
   ...
 
   Keep questions specific. Binary or multiple-choice where possible.
-  No open-ended questions. No more than 7 questions.
+  No open-ended questions. No more than 7 questions.`
+
+const MODE_INSTRUCTIONS: Record<Mode, string> = {
+  formal: `\
+IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
+  Translate to thorough, structured English markdown. No AISP notation in output.
+  - Invariants → declarative statements. Negations as "never" or "must not".
+  - Types → definition tables with every value listed explicitly.
+  - Entities → field tables: Field | Type | Notes. Nullable fields noted.
+  - Functions → per-case tables or numbered steps covering every case.
+  - Constraints → grouped bullets. Negations as "never", "must not".
+  - Preserve all code blocks exactly.
+  - Do not add rationale not in the source.
+  - No hedge words: never use "typically", "usually", "often", "generally".
+  - No preamble. Start with the first section heading.`,
+
+  narrative: `\
+IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
+  Translate to flowing connected prose. No AISP notation in output.
+  - Write a brief prose introduction for the whole document.
+  - For each section, write one or two paragraphs of plain English.
+  - Use connective language: "whenever", "which means", "so that", "in other words".
+  - Use tables only for compact enumerations where prose would be harder to scan.
+  - Preserve all code blocks exactly.
+  - Do not add rationale not in the source.
+  - No hedge words: never use "typically", "usually", "often", "generally".
+  - No preamble. Start with the first section heading.`,
+
+  hybrid: `\
+IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
+  Translate to a mix of prose and structured markdown. No AISP notation in output.
+  - Open each section with one or two plain-English sentences stating the intent.
+  - Follow with a table, numbered list, or bullet list for the details.
+  - Preserve all code blocks exactly.
+  - Do not add rationale not in the source.
+  - No hedge words: never use "typically", "usually", "often", "generally".
+  - No preamble. Start with the first section heading.`,
+
+  sketch: `\
+IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
+  Translate to a high-level prose sketch. No AISP notation in output.
+  - Write a short overview paragraph for the whole document.
+  - Render each major point as a single clear sentence.
+  - Collect the key points into a bullet list.
+  - Omit minor technical detail; keep the meaning intact.
+  - Render code examples as plain pseudocode or a prose description.
+  - Close with a one-sentence confidence statement.`,
+
+  summary: `\
+IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
+  Translate to a brief plain-English executive summary. No AISP notation in output.
+  - Write a short paragraph summarising what this specification does.
+  - Follow with a bullet list of the key points. No tables.
+  - List two or three key takeaways.
+  - State overall confidence in one plain sentence.
+  - No code blocks. Describe what code examples do in plain words.`,
+}
+
+function getToEnglishSystem(mode: Mode): string {
+  return `You are translating an AISP 5.1 formal specification back to plain English.
+
+First check the evidence block (⟦Ε⟧) for the τ tier value.
+
+${MODE_INSTRUCTIONS[mode]}
+
+${NEEDS_CLARIFICATION_BLOCK}
 
 Output only the markdown or the NEEDS_CLARIFICATION block. No preamble.`
+}
 
-const REPL_SYSTEM = TO_ENGLISH_SYSTEM + `\n\n\
+function getReplSystem(mode: Mode): string {
+  return getToEnglishSystem(mode) + `\n\n\
 You are in an interactive refinement session. \
 Maintain continuity with the conversation history — when the user refines or \
 extends a spec, integrate the changes and return the complete current specification. \
 Each user message is an AISP document representing their intent.`
+}
 
 // ── Evidence parsing ──────────────────────────────────────────────────────────
 
@@ -356,9 +410,10 @@ async function purify(opts: {
   purifyModel: string
   apiKey: string
   verbose: boolean
+  mode: Mode
   fromAisp?: boolean
 }): Promise<string> {
-  const { text, provider, mainModel, purifyModel, apiKey, verbose, fromAisp } = opts
+  const { text, provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp } = opts
 
   let aisp: string
   if (fromAisp) {
@@ -414,7 +469,7 @@ async function purify(opts: {
 
   // Step 2: AISP → English or clarifying questions (main model)
   eprint(`→ translating back (${mainModel})...`, verbose)
-  const english = await callLLM(provider, apiKey, mainModel, TO_ENGLISH_SYSTEM, aisp)
+  const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp)
 
   return [
     `QUALITY: ${authoritativeTierSymbol} ${authoritativeTierName} (${deltaStr}${selfDeltaStr})`,
@@ -461,6 +516,7 @@ function parseArgs(argv: string[]) {
     model:        null as string | null,
     purifyModel:  null as string | null,
     apiKey:       null as string | null,
+    mode:         (process.env.PURIFY_MODE ?? "narrative") as Mode,
     verbose:      false,
     fromAisp:     false,
     repl:         false,
@@ -476,8 +532,18 @@ function parseArgs(argv: string[]) {
     else if (a === "--provider")                { opts.provider = args[++i] as Provider }
     else if (a === "--model")                   { opts.model = args[++i] }
     else if (a === "--purify-model")            { opts.purifyModel = args[++i] }
+    else if (a === "--mode")                    { opts.mode = args[++i] as Mode }
+    else if (a === "--formal")                  { opts.mode = "formal" }
+    else if (a === "--narrative")               { opts.mode = "narrative" }
+    else if (a === "--hybrid")                  { opts.mode = "hybrid" }
+    else if (a === "--sketch")                  { opts.mode = "sketch" }
+    else if (a === "--summary")                 { opts.mode = "summary" }
     else if (a === "--api-key")                 { opts.apiKey = args[++i] }
     else if (!a.startsWith("--"))               { positional.push(a) }
+    else {
+      process.stderr.write(`error: unknown option ${a}\n`)
+      process.exit(1)
+    }
   }
 
   return { opts, positional }
@@ -493,18 +559,26 @@ Usage:
   cat spec.md | purify
 
 Options:
-  --provider     anthropic | openai          (default: anthropic)
-  --model        main model (AISP→English)   (default: claude-sonnet-4-6)
-  --purify-model cheap model (En→AISP)       (default: claude-haiku-4-5-20251001)
-  --api-key      API key                     (default: env var)
+  --provider     anthropic | openai                          (default: anthropic)
+  --model        main model (AISP→English)                   (default: claude-sonnet-4-6)
+  --purify-model cheap model (En→AISP)                       (default: claude-haiku-4-5-20251001)
+  --mode         formal|narrative|hybrid|sketch|summary      (default: narrative)
+  --api-key      API key                                     (default: env var)
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
   --verbose      write AISP and scores to stderr
   --help
 
+Modes:
+  formal     Full precision; tables and notation throughout
+  narrative  Flowing prose with symbolic anchors (default)
+  hybrid     Balanced prose and notation
+  sketch     High-level overview; bullet list; minimal symbols
+  summary    Plain English; no notation; executive summary
+
 Environment:
   ANTHROPIC_API_KEY  OPENAI_API_KEY
-  PURIFY_PROVIDER    PURIFY_MODEL    PURIFY_MODEL_CHEAP
+  PURIFY_PROVIDER    PURIFY_MODEL    PURIFY_MODEL_CHEAP  PURIFY_MODE
 
 Output:
   QUALITY: <tier> <name> (δ=<validator_score>, self_δ=<self_score>)
@@ -525,16 +599,17 @@ async function runRepl(opts: {
   purifyModel: string
   apiKey: string
   verbose: boolean
+  mode: Mode
   fromAisp: boolean
 }): Promise<void> {
-  const { provider, mainModel, purifyModel, apiKey, verbose, fromAisp } = opts
+  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp } = opts
   const messages: ConvMessage[] = []
 
   const rl = createInterface({ input: process.stdin })
 
   process.stderr.write(
     `purify repl — empty line to submit, /exit or ctrl-c to quit\n` +
-    `provider=${provider}  purify=${purifyModel}  model=${mainModel}\n\n`,
+    `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n\n`,
   )
   process.stderr.write("➤ ")
 
@@ -597,7 +672,7 @@ async function runRepl(opts: {
       // Step 2: AISP → English via main model with full conversation history
       messages.push({ role: "user", content: aisp })
       process.stderr.write(`→ translating (${mainModel})...\n`)
-      const response = await callLLMRepl(provider, apiKey, mainModel, REPL_SYSTEM, messages)
+      const response = await callLLMRepl(provider, apiKey, mainModel, getReplSystem(mode), messages)
       messages.push({ role: "assistant", content: response })
 
       process.stdout.write("\n" + response + "\n\n")
@@ -621,6 +696,15 @@ async function main() {
     process.exit(0)
   }
 
+  if (opts.repl) {
+    const provider    = opts.provider
+    const mainModel   = opts.model       ?? process.env.PURIFY_MODEL       ?? DEFAULT_MODELS[provider]
+    const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
+    const apiKey      = resolveApiKey(provider, opts.apiKey)
+    await runRepl({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp })
+    process.exit(0)
+  }
+
   const text = resolveInput(positional)
   if (!text?.trim()) {
     printHelp()
@@ -632,7 +716,7 @@ async function main() {
   const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP  ?? DEFAULT_CHEAP_MODELS[provider]
   const apiKey     = resolveApiKey(provider, opts.apiKey)
 
-  eprint(`purify: provider=${provider} purify=${purifyModel} main=${mainModel}`, opts.verbose)
+  eprint(`purify: provider=${provider} purify=${purifyModel} main=${mainModel} mode=${opts.mode}`, opts.verbose)
 
   try {
     const result = await purify({
@@ -643,6 +727,7 @@ async function main() {
       purifyModel,
       apiKey,
       verbose: opts.verbose,
+      mode: opts.mode,
     })
     console.log(result)
   } catch (err) {
