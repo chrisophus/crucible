@@ -1,0 +1,167 @@
+𝔸1.0.purify@2026-03-22
+γ≔purify.spec.project
+ρ≔⟨cli,pipeline,providers,scoring,output⟩
+⊢deterministic∧self-certifying
+
+;; ─── Ω: INVARIANTS ───
+⟦Ω:Invariants⟧{
+  ∀input∈{File,InlineText,Stdin}:∃!pipeline(input)→Output
+  ∀run:step1(English→AISP)≺step2(AISP→English)
+  ∀run:validate(aisp)∘parseEvidence(aisp)→authoritativeDelta
+  authoritativeDelta≜validatorDelta?validatorDelta:selfReportedDelta
+  ∀tier:tier(δ)≜⌈δ⌉∈{◊⁺⁺,◊⁺,◊,◊⁻,⊘}
+  tier(δ)≡⊘⇒output(NEEDS_CLARIFICATION∧Questions)
+  tier(δ)≢⊘⇒output(PurifiedEnglish)
+  ∀provider∈{anthropic,openai}:∃apiKey⇒proceed; ¬∃apiKey⇒exit(1)
+  ∀step1:model≜cheapModel; ∀step2:model≜mainModel
+}
+
+;; ─── Σ: TYPES ───
+⟦Σ:Types⟧{
+  Provider≜{anthropic,openai}
+  Tier≜{◊⁺⁺,◊⁺,◊,◊⁻,⊘}
+  TierName≜{◊⁺⁺↦platinum,◊⁺↦gold,◊↦silver,◊⁻↦bronze,⊘↦invalid}
+  InputMode≜{File,InlineText,Stdin}
+  OutputMode≜{PurifiedEnglish,NeedsClarification}
+  Delta≜ℝ[0.00,1.00]
+  Evidence≜⟨delta:Delta?,tierSymbol:Tier,tierName:TierName⟩
+  ValidatorResult≜⟨valid:𝔹,delta:Delta,tier:𝕊,ambiguity:ℝ,pureDensity:ℝ⟩
+  Config≜⟨provider:Provider,mainModel:𝕊,purifyModel:𝕊,apiKey:𝕊,verbose:𝔹⟩
+}
+
+;; ─── Γ: ENTITIES ───
+⟦Γ:Entities⟧{
+  ;; CLI input resolution — precedence: positional arg > stdin
+  InputResolver≜⟨
+    positional:List⟨𝕊⟩,
+    isFile:𝔹,       ;; true iff positional.length=1 ∧ existsSync(positional[0])
+    isTTY:𝔹,        ;; true iff process.stdin.isTTY
+    resolved:𝕊?     ;; null → print help and exit
+  ⟩
+
+  ;; Model defaults per provider
+  ModelDefaults≜⟨
+    anthropic.main≜"claude-sonnet-4-6",
+    anthropic.cheap≜"claude-haiku-4-5-20251001",
+    openai.main≜"gpt-4o",
+    openai.cheap≜"gpt-4o-mini"
+  ⟩
+
+  ;; Override precedence for models:
+  ;; CLI flag > PURIFY_MODEL env var > ModelDefaults.main
+  ;; CLI flag > PURIFY_MODEL_CHEAP env var > ModelDefaults.cheap
+
+  ;; Override precedence for provider:
+  ;; CLI --provider > PURIFY_PROVIDER env var > "anthropic"
+
+  AISPIntermediate≜⟨
+    body:𝕊,              ;; raw AISP 5.1 document text
+    selfEvidence:Evidence,
+    validatorResult:ValidatorResult?
+  ⟩
+
+  PurifyOutput≜⟨
+    qualityLine:𝕊,   ;; "QUALITY: <tier> <name> (δ=X, self_δ=Y)"
+    separator:𝕊,     ;; "---"
+    body:𝕊           ;; purified English or NEEDS_CLARIFICATION block
+  ⟩
+}
+
+;; ─── Λ: FUNCTIONS ───
+⟦Λ:Functions⟧{
+  ;; Top-level pipeline
+  purify:Config×𝕊→PurifyOutput
+  purify≜λ(cfg,text).
+    let aisp    = callLLM(cfg.provider, cfg.purifyModel, TO_AISP_SYSTEM, text) in
+    let self    = parseEvidence(aisp) in
+    let vResult = runValidator(aisp) in
+    let δ_auth  = vResult?.delta ?? self.delta in
+    let tier    = calcTier(δ_auth) in
+    let english = callLLM(cfg.provider, cfg.mainModel, TO_ENGLISH_SYSTEM, aisp) in
+    PurifyOutput(qualityLine(tier,δ_auth,self.delta), "---", english)
+
+  ;; LLM call — provider-agnostic
+  callLLM:Provider×𝕊×𝕊×𝕊→𝕊
+  callLLM≜λ(p,model,system,user).
+    case p of
+      anthropic ⇒ Anthropic.messages.create(model,system,user).text
+    | openai    ⇒ OpenAI.chat.completions.create(model,system,user).content
+
+  ;; Delta → Tier
+  calcTier:Delta?→Tier
+  calcTier≜λδ.
+    δ=null → ⊘
+  | δ≥0.75 → ◊⁺⁺
+  | δ≥0.60 → ◊⁺
+  | δ≥0.40 → ◊
+  | δ≥0.20 → ◊⁻
+  | _      → ⊘
+
+  ;; Evidence block parser — reads δ≜X and τ≜Y from AISP text
+  parseEvidence:𝕊→Evidence
+  parseEvidence≜λaisp.
+    let δ = match(aisp, /δ[≜=]\s*([\d.]+)/)?.float in
+    let τ = match(aisp, /τ[≜=]\s*(◊⁺⁺|◊⁺|◊⁻|◊|⊘)/)?.group ?? calcTier(δ) in
+    Evidence(δ, τ, TierName[τ])
+
+  ;; Independent validator — authoritative source for δ
+  runValidator:𝕊→ValidatorResult?
+  runValidator≜λaisp.
+    try:
+      AISP.init()∘AISP.validate(aisp)→⟨valid,tier,ambiguity⟩
+      calculateSemanticDensity(aisp)→⟨delta,pureDensity⟩
+      ValidatorResult(valid,delta,tier,ambiguity,pureDensity)
+    catch: null    ;; validator failure is non-fatal; falls back to self-report
+
+  ;; Input resolution
+  resolveInput:List⟨𝕊⟩→𝕊?
+  resolveInput≜λargs.
+    |args|=1 ∧ existsSync(args[0]) ⇒ readFileSync(args[0])
+  | |args|>0                       ⇒ args.join(" ")
+  | ¬isTTY                         ⇒ readFileSync("/dev/stdin")
+  | _                              ⇒ null
+}
+
+;; ─── Χ: CONSTRAINTS ───
+⟦Χ:Constraints⟧{
+  ;; Input
+  ∀input:input.trim()≡ε⇒printHelp∧exit(0)
+  ∀file:¬existsSync(file)⇒treated as inline text, not error
+
+  ;; API keys
+  ¬∃ANTHROPIC_API_KEY∧provider=anthropic∧¬explicit_key⇒stderr∧exit(1)
+  ¬∃OPENAI_API_KEY∧provider=openai∧¬explicit_key⇒stderr∧exit(1)
+
+  ;; LLM calls
+  ∀call:max_tokens≜8096
+  step1∧step2 are sequential, never parallel (step2 depends on step1 output)
+
+  ;; Scoring authority
+  validatorResult≢null⇒δ_auth≜validatorResult.delta
+  validatorResult≡null⇒δ_auth≜selfEvidence.delta
+  selfEvidence.delta≡null⇒tier≜⊘
+
+  ;; Output format
+  ∀output:line1≜"QUALITY: <tier> <name> (δ=X, self_δ=Y)"
+  ∀output:line2≜"---"
+  tier≢⊘⇒body is purified English markdown, no hedge words
+  tier≡⊘⇒body starts with "NEEDS_CLARIFICATION", followed by ≤7 numbered questions
+
+  ;; Verbose mode
+  verbose⇒write(AISP intermediate, validator scores) to stderr only
+  ¬verbose⇒stderr silent
+}
+
+;; ─── Ε: EVIDENCE ───
+⟦Ε⟧⟨
+δ≜0.82
+τ≜◊⁺⁺
+⊢pipeline:English→AISP→English with scoring
+⊢providers:{anthropic,openai}
+⊢tiers:{◊⁺⁺,◊⁺,◊,◊⁻,⊘} fully defined with δ thresholds
+⊢scoring:validatorDelta authoritative over selfReportedDelta
+⊢inputs:{File,InlineText,Stdin} with precedence order
+⊢models:cheapModel for step1, mainModel for step2
+⊢constraints:apiKey required, max_tokens=8096, sequential steps
+⊢output:QUALITY line + separator + body; ⊘⇒NEEDS_CLARIFICATION
+⟩
