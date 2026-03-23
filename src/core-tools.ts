@@ -1,46 +1,67 @@
 /**
- * Core implementations for the new purify MCP tools:
- * purify_reflect, purify_translate, purify_clarify, purify_update, purify_init
+ * V3 session-based pipeline for purify MCP tools.
+ *
+ * Pipeline: Phase1(LLM) → Phase2(ExternalValidator) → Phase3(Branch)
+ *           → Phase3a(LLM questions) | Phase3b(LLM refine) → Phase4(LLM translate)
+ *
+ * Conversation accumulates — never replaced.
+ * System prompt (domain context) is cached for session lifetime.
  */
 
 import { readFileSync } from "node:fs"
 import {
-  CLARIFICATION_EXTRACTION_SYSTEM,
-  CLARIFY_SYSTEM,
   CONTRADICTION_DETECTION_SYSTEM,
   INIT_SYSTEM,
-  REFLECT_SYSTEM,
-  TRANSLATE_FIDELITY_SYSTEM,
-  UPDATE_SYSTEM,
+  buildAnswersTurnContent,
+  buildPurifyTurnContent,
+  buildQuestionRequestContent,
+  buildTranslateTurnContent,
+  buildUpdateTurnContent,
+  getSessionSystemPrompt,
 } from "./prompts.ts"
-import { callLLM, callLLMWithTools, DEFAULT_CHEAP_MODELS, DEFAULT_MODELS } from "./providers.ts"
+import { DEFAULT_CHEAP_MODELS, DEFAULT_MODELS, callLLMRepl } from "./providers.ts"
+import { createSession, getSession, saveSession } from "./sessions.ts"
 import type {
-  Clarification,
+  Config,
   Contradiction,
+  Gap,
+  PipelineValidationResult,
   Provider,
+  PurifyRunResult,
   QualityTier,
-  ReflectionResult,
+  Question,
   Scores,
-  TranslationResult,
-  UpdateResult,
+  Session,
+  ValidatorResult,
 } from "./types.ts"
 import { parseEvidence, runValidator } from "./validator.ts"
+
+// ── Tier ordering ──────────────────────────────────────────────────────────────
+
+const TIER_ORDER: Record<QualityTier, number> = {
+  "⊘": 0,
+  "◊⁻": 1,
+  "◊": 2,
+  "◊⁺": 3,
+  "◊⁺⁺": 4,
+}
+
+function tierBelow(a: QualityTier, b: QualityTier): boolean {
+  return TIER_ORDER[a] < TIER_ORDER[b]
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function parseJSON<T>(text: string): T {
   const stripped = text.trim()
-  // Strip markdown code fences if present
   const fenceMatch = stripped.match(/^```(?:json)?\s*\n([\s\S]+?)\n```\s*$/)
-  if (fenceMatch) {
-    return JSON.parse(fenceMatch[1]) as T
-  }
+  if (fenceMatch) return JSON.parse(fenceMatch[1]) as T
   return JSON.parse(stripped) as T
 }
 
 function parsePhi(aisp: string): number {
-  const phiMatch = aisp.match(/φ[≜=]\s*(\d+)/)
-  return phiMatch ? Math.min(100, parseInt(phiMatch[1], 10)) : 65
+  const m = aisp.match(/φ[≜=]\s*(\d+)/)
+  return m ? Math.min(100, parseInt(m[1], 10)) : 65
 }
 
 function computeTier(delta: number, phi: number): QualityTier {
@@ -49,6 +70,42 @@ function computeTier(delta: number, phi: number): QualityTier {
   if (delta >= 0.4 && phi >= 65) return "◊"
   if (delta >= 0.2 && phi >= 40) return "◊⁻"
   return "⊘"
+}
+
+function computeGaps(
+  validatorResult: ValidatorResult | null,
+  scores: Scores,
+): Gap[] {
+  const gaps: Gap[] = []
+  if (scores.delta < 0.4) {
+    gaps.push({ location: "overall", signal: "low_delta" })
+  }
+  if (validatorResult && !validatorResult.valid) {
+    gaps.push({ location: "document_structure", signal: "missing_block" })
+  }
+  return gaps
+}
+
+function formatValidationSummary(validation: PipelineValidationResult): string {
+  const lines = [
+    "Validation Result:",
+    `- Tier: ${validation.scores.tau}`,
+    `- Delta: ${validation.scores.delta.toFixed(3)}`,
+    `- Phi: ${validation.scores.phi}`,
+  ]
+  if (validation.contradictions.length > 0) {
+    lines.push("\nContradictions:")
+    for (const c of validation.contradictions) {
+      lines.push(`  - ${c.kind}: ${c.statement_a} | ${c.statement_b}`)
+    }
+  }
+  if (validation.gaps.length > 0) {
+    lines.push("\nGaps:")
+    for (const g of validation.gaps) {
+      lines.push(`  - ${g.signal} at ${g.location}`)
+    }
+  }
+  return lines.join("\n")
 }
 
 function resolveApiKey(provider: Provider): string {
@@ -70,7 +127,7 @@ interface LLMOpts {
   insecure?: boolean
 }
 
-function resolveOpts(opts: LLMOpts): {
+interface ResolvedOpts {
   provider: Provider
   mainModel: string
   cheapModel: string
@@ -78,13 +135,33 @@ function resolveOpts(opts: LLMOpts): {
   baseUrl?: string
   openaiUser?: string
   insecure?: boolean
-} {
-  const provider = (opts.provider ?? (process.env.PURIFY_PROVIDER as Provider | undefined) ?? "anthropic") as Provider
-  const mainModel = opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
-  const cheapModel = opts.cheapModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
-  const apiKey = resolveApiKey(provider)
-  return { provider, mainModel, cheapModel, apiKey, baseUrl: opts.baseUrl, openaiUser: opts.openaiUser, insecure: opts.insecure }
 }
+
+function resolveOpts(opts: LLMOpts): ResolvedOpts {
+  const provider = (
+    opts.provider ??
+    (process.env.PURIFY_PROVIDER as Provider | undefined) ??
+    "anthropic"
+  ) as Provider
+  const mainModel =
+    opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
+  const cheapModel =
+    opts.cheapModel ??
+    process.env.PURIFY_MODEL_CHEAP ??
+    DEFAULT_CHEAP_MODELS[provider]
+  const apiKey = resolveApiKey(provider)
+  return {
+    provider,
+    mainModel,
+    cheapModel,
+    apiKey,
+    baseUrl: opts.baseUrl,
+    openaiUser: opts.openaiUser,
+    insecure: opts.insecure,
+  }
+}
+
+// ── Phase 2: External validator ────────────────────────────────────────────────
 
 async function detectContradictions(
   aisp: string,
@@ -94,7 +171,15 @@ async function detectContradictions(
   llmOpts: { baseUrl?: string; openaiUser?: string; insecure?: boolean },
 ): Promise<Contradiction[]> {
   try {
-    const raw = await callLLM(provider, apiKey, model, CONTRADICTION_DETECTION_SYSTEM, aisp, llmOpts)
+    const raw = await callLLMRepl(
+      provider,
+      apiKey,
+      model,
+      CONTRADICTION_DETECTION_SYSTEM,
+      [{ role: "user", content: aisp }],
+      undefined,
+      llmOpts,
+    )
     const parsed = parseJSON<{ contradictions: Contradiction[] }>(raw)
     return parsed.contradictions ?? []
   } catch {
@@ -102,187 +187,357 @@ async function detectContradictions(
   }
 }
 
-async function extractClarifications(
+async function computeValidationResult(
   aisp: string,
   provider: Provider,
   apiKey: string,
-  model: string,
+  mainModel: string,
   llmOpts: { baseUrl?: string; openaiUser?: string; insecure?: boolean },
-): Promise<Clarification[]> {
-  try {
-    const raw = await callLLM(provider, apiKey, model, CLARIFICATION_EXTRACTION_SYSTEM, aisp, llmOpts)
-    const parsed = parseJSON<{ clarifications: Clarification[] }>(raw)
-    return parsed.clarifications ?? []
-  } catch {
-    return []
-  }
-}
-
-async function computeScores(aisp: string): Promise<Scores> {
+): Promise<PipelineValidationResult> {
   const validatorResult = await runValidator(aisp)
   const selfReport = parseEvidence(aisp)
   const delta = validatorResult?.delta ?? selfReport.delta ?? 0
   const phi = parsePhi(aisp)
   const tau = computeTier(delta, phi)
-  return { delta, phi, tau }
+  const scores: Scores = { delta, phi, tau }
+
+  const contradictions = await detectContradictions(
+    aisp,
+    provider,
+    apiKey,
+    mainModel,
+    llmOpts,
+  )
+  const gaps = computeGaps(validatorResult, scores)
+
+  return { scores, contradictions, gaps }
 }
 
-// ── purify_reflect ─────────────────────────────────────────────────────────────
+// ── Phase 1: Purify (English → AISP) ──────────────────────────────────────────
 
-export async function reflectText(
+async function runPhase1(
+  session: Session,
+  text: string,
+  resolved: ResolvedOpts,
+): Promise<string> {
+  const userContent = buildPurifyTurnContent(text)
+  session.messages.push({ role: "user", content: userContent })
+
+  const aisp = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.cheapModel,
+    session.systemPrompt,
+    session.messages,
+    undefined,
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
+  )
+
+  session.messages.push({ role: "assistant", content: aisp })
+  session.aisp_current = aisp
+  saveSession(session)
+  return aisp
+}
+
+// ── Phase 3a: Generate questions (LLM) ────────────────────────────────────────
+
+async function generateQuestions(
+  session: Session,
+  validation: PipelineValidationResult,
+  resolved: ResolvedOpts,
+): Promise<Question[]> {
+  const summary = formatValidationSummary(validation)
+  const userContent = buildQuestionRequestContent(summary)
+  session.messages.push({ role: "user", content: userContent })
+
+  const raw = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    session.systemPrompt,
+    session.messages,
+    undefined,
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
+  )
+
+  let questions: Question[] = []
+  try {
+    questions = parseJSON<Question[]>(raw)
+  } catch {
+    questions = [{ priority: "OPTIONAL", question: raw.trim() }]
+  }
+
+  session.messages.push({ role: "assistant", content: raw })
+  saveSession(session)
+  return questions
+}
+
+// ── Phase 3b: Incorporate answers (LLM refines AISP) ──────────────────────────
+
+async function incorporateAnswers(
+  session: Session,
+  answers: Array<{ question: string; answer: string }>,
+  resolved: ResolvedOpts,
+): Promise<string> {
+  const userContent = buildAnswersTurnContent(answers)
+  session.messages.push({ role: "user", content: userContent })
+
+  const refinedAisp = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    session.systemPrompt,
+    session.messages,
+    undefined,
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
+  )
+
+  session.messages.push({ role: "assistant", content: refinedAisp })
+  session.aisp_current = refinedAisp
+  session.round += 1
+  saveSession(session)
+  return refinedAisp
+}
+
+// ── Phase 3: Branch ────────────────────────────────────────────────────────────
+
+type Phase3Result =
+  | { action: "has_contradictions"; contradictions: Contradiction[] }
+  | { action: "needs_clarification"; questions: Question[] }
+  | { action: "proceed_to_phase4" }
+
+async function runPhase3(
+  session: Session,
+  validation: PipelineValidationResult,
+  resolved: ResolvedOpts,
+): Promise<Phase3Result> {
+  const { config } = session
+
+  // Contradictions take priority
+  if (validation.contradictions.length > 0 && config.ask_on_contradiction) {
+    return { action: "has_contradictions", contradictions: validation.contradictions }
+  }
+
+  // Below threshold — check clarification mode
+  if (tierBelow(validation.scores.tau, config.score_threshold)) {
+    if (config.clarification_mode === "never") {
+      return { action: "proceed_to_phase4" }
+    }
+    if (
+      (config.clarification_mode === "always" ||
+        config.clarification_mode === "on_low_score") &&
+      session.round < config.max_clarify_rounds
+    ) {
+      const questions = await generateQuestions(session, validation, resolved)
+      return { action: "needs_clarification", questions }
+    }
+  }
+
+  // At or above threshold, or max rounds reached
+  return { action: "proceed_to_phase4" }
+}
+
+// ── Phase 4: Translate (AISP → English) ───────────────────────────────────────
+
+async function runPhase4(
+  session: Session,
+  format: string,
+  resolved: ResolvedOpts,
+): Promise<string> {
+  const userContent = buildTranslateTurnContent(format)
+  session.messages.push({ role: "user", content: userContent })
+
+  const purified = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    session.systemPrompt,
+    session.messages,
+    undefined,
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
+  )
+
+  session.messages.push({ role: "assistant", content: purified })
+  saveSession(session)
+  return purified
+}
+
+// ── High-level tool implementations ───────────────────────────────────────────
+
+// purify_run — starts a session, runs Phase1→Phase3
+export async function runPurifyPipeline(
   text: string,
   context: string | undefined,
+  config: Config,
   opts: LLMOpts,
-): Promise<ReflectionResult> {
-  const { provider, mainModel, apiKey, baseUrl, openaiUser, insecure } = resolveOpts(opts)
-  const userContent = context ? `CONTEXT:\n${context}\n\nTEXT:\n${text}` : text
-  const raw = await callLLM(provider, apiKey, mainModel, REFLECT_SYSTEM, userContent, {
-    baseUrl,
-    openaiUser,
-    insecure,
-  })
-  return parseJSON<ReflectionResult>(raw)
+): Promise<PurifyRunResult> {
+  const resolved = resolveOpts(opts)
+  const systemPrompt = getSessionSystemPrompt(context)
+  const session = createSession(systemPrompt, config)
+
+  const aisp = await runPhase1(session, text, resolved)
+
+  const validation = await computeValidationResult(
+    aisp,
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+  )
+
+  const phase3 = await runPhase3(session, validation, resolved)
+
+  if (phase3.action === "has_contradictions") {
+    return {
+      session_id: session.id,
+      status: "has_contradictions",
+      contradictions: phase3.contradictions,
+    }
+  }
+
+  if (phase3.action === "needs_clarification") {
+    return {
+      session_id: session.id,
+      status: "needs_clarification",
+      questions: phase3.questions,
+    }
+  }
+
+  return { session_id: session.id, status: "ready" }
 }
 
-// ── purify_translate ───────────────────────────────────────────────────────────
-
-export async function translateText(
-  text: string,
-  context: string | undefined,
-  interpretation: string | undefined,
-  opts: LLMOpts,
-): Promise<TranslationResult> {
-  const { provider, mainModel, cheapModel, apiKey, baseUrl, openaiUser, insecure } = resolveOpts(opts)
-  const llmOpts = { baseUrl, openaiUser, insecure }
-
-  // Build the English input for AISP generation
-  let aispInput = text
-  if (interpretation) {
-    aispInput = `AUTHOR INTERPRETATION (corrected):\n${interpretation}\n\nORIGINAL TEXT:\n${text}`
-  }
-  if (context) {
-    aispInput = `DOMAIN CONTEXT:\n${context}\n\n${aispInput}`
-  }
-
-  // Step 1: English → AISP
-  let aisp: string
-  if (provider === "anthropic") {
-    aisp = await callLLMWithTools(apiKey, cheapModel, aispInput)
-  } else {
-    const { TO_AISP_SYSTEM } = await import("./prompts.ts")
-    aisp = await callLLM(provider, apiKey, cheapModel, TO_AISP_SYSTEM, aispInput, llmOpts)
-  }
-
-  // Step 2: Compute scores
-  const scores = await computeScores(aisp)
-
-  // Step 3: Contradiction detection
-  const contradictions = await detectContradictions(aisp, provider, apiKey, mainModel, llmOpts)
-
-  // Step 4: Block purified output if contradictions exist
-  if (contradictions.length > 0) {
-    const clarifications = await extractClarifications(aisp, provider, apiKey, mainModel, llmOpts)
-    return { aisp, purified: null, scores, contradictions, clarifications }
-  }
-
-  // Step 5: Extract clarifications
-  const clarifications = await extractClarifications(aisp, provider, apiKey, mainModel, llmOpts)
-
-  // Step 6: If score is too low (⊘), skip purified output
-  if (scores.tau === "⊘") {
-    return { aisp, purified: null, scores, contradictions, clarifications }
-  }
-
-  // Step 7: AISP → Purified English
-  const purified = await callLLM(provider, apiKey, mainModel, TRANSLATE_FIDELITY_SYSTEM, aisp, llmOpts)
-
-  return { aisp, purified, scores, contradictions, clarifications }
-}
-
-// ── purify_clarify ─────────────────────────────────────────────────────────────
-
-export async function clarifyTranslation(
-  aisp: string,
-  context: string | undefined,
+// purify_clarify — submits answers, re-runs Phase2→Phase3
+export async function runClarifyPipeline(
+  sessionId: string,
   answers: Array<{ question: string; answer: string }>,
   opts: LLMOpts,
-): Promise<TranslationResult> {
-  const { provider, mainModel, apiKey, baseUrl, openaiUser, insecure } = resolveOpts(opts)
-  const llmOpts = { baseUrl, openaiUser, insecure }
+): Promise<PurifyRunResult> {
+  const session = getSession(sessionId)
+  const resolved = resolveOpts(opts)
 
-  const answersBlock = answers.map((a, i) => `Q${i + 1}: ${a.question}\nA${i + 1}: ${a.answer}`).join("\n\n")
-  const userContent = [
-    context ? `DOMAIN CONTEXT:\n${context}` : "",
-    `AISP:\n${aisp}`,
-    `ANSWERS TO CLARIFYING QUESTIONS:\n${answersBlock}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
+  const refinedAisp = await incorporateAnswers(session, answers, resolved)
 
-  // Refine AISP with answers
-  const updatedAisp = await callLLM(provider, apiKey, mainModel, CLARIFY_SYSTEM, userContent, llmOpts)
+  const validation = await computeValidationResult(
+    refinedAisp,
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+  )
 
-  const scores = await computeScores(updatedAisp)
-  const contradictions = await detectContradictions(updatedAisp, provider, apiKey, mainModel, llmOpts)
+  const phase3 = await runPhase3(session, validation, resolved)
 
-  if (contradictions.length > 0) {
-    const clarifications = await extractClarifications(updatedAisp, provider, apiKey, mainModel, llmOpts)
-    return { aisp: updatedAisp, purified: null, scores, contradictions, clarifications }
+  if (phase3.action === "has_contradictions") {
+    return {
+      session_id: session.id,
+      status: "has_contradictions",
+      contradictions: phase3.contradictions,
+    }
   }
 
-  const clarifications = await extractClarifications(updatedAisp, provider, apiKey, mainModel, llmOpts)
-
-  if (scores.tau === "⊘") {
-    return { aisp: updatedAisp, purified: null, scores, contradictions, clarifications }
+  if (phase3.action === "needs_clarification") {
+    return {
+      session_id: session.id,
+      status: "needs_clarification",
+      questions: phase3.questions,
+    }
   }
 
-  const purified = await callLLM(provider, apiKey, mainModel, TRANSLATE_FIDELITY_SYSTEM, updatedAisp, llmOpts)
-
-  return { aisp: updatedAisp, purified, scores, contradictions, clarifications }
+  return { session_id: session.id, status: "ready" }
 }
 
-// ── purify_update ──────────────────────────────────────────────────────────────
+// purify_translate — runs Phase4, returns purified English
+export async function runTranslatePipeline(
+  sessionId: string,
+  format: string,
+  opts: LLMOpts,
+): Promise<{ purified: string; session_id: string }> {
+  const session = getSession(sessionId)
+  const resolved = resolveOpts(opts)
 
-export async function updatePurified(
-  existingPurified: string,
-  existingAisp: string,
+  const purified = await runPhase4(session, format, resolved)
+
+  return { purified, session_id: session.id }
+}
+
+// purify_update — seeds new session from existing, appends change, re-runs
+export async function runUpdatePipeline(
+  sessionId: string,
   change: string,
   context: string | undefined,
+  config: Config,
   opts: LLMOpts,
-): Promise<UpdateResult> {
-  const { provider, mainModel, apiKey, baseUrl, openaiUser, insecure } = resolveOpts(opts)
-  const llmOpts = { baseUrl, openaiUser, insecure }
+): Promise<PurifyRunResult> {
+  const prev = getSession(sessionId)
+  const resolved = resolveOpts(opts)
 
-  const userContent = [
-    context ? `DOMAIN CONTEXT:\n${context}` : "",
-    `EXISTING_PURIFIED:\n${existingPurified}`,
-    `EXISTING_AISP:\n${existingAisp}`,
-    `CHANGE:\n${change}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
+  // Seed new session with previous conversation
+  const systemPrompt = getSessionSystemPrompt(context ?? undefined)
+  const newSession = createSession(systemPrompt, config)
+  newSession.messages = [...prev.messages]
+  saveSession(newSession)
 
-  const raw = await callLLM(provider, apiKey, mainModel, UPDATE_SYSTEM, userContent, llmOpts)
+  // Append change as new user turn and call LLM to produce updated AISP
+  const updateContent = buildUpdateTurnContent(change)
+  newSession.messages.push({ role: "user" as const, content: updateContent })
 
-  let parsed: { purified: string; aisp: string; diff: UpdateResult["diff"] }
-  try {
-    parsed = parseJSON(raw)
-  } catch {
-    // Fallback: treat entire response as updated purified text
-    parsed = { purified: raw, aisp: existingAisp, diff: [] }
+  const updatedAisp = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.cheapModel,
+    newSession.systemPrompt,
+    newSession.messages,
+    undefined,
+    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+  )
+
+  newSession.messages.push({ role: "assistant" as const, content: updatedAisp })
+  newSession.aisp_current = updatedAisp
+  saveSession(newSession)
+
+  const validation = await computeValidationResult(
+    updatedAisp,
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+  )
+
+  const phase3 = await runPhase3(newSession, validation, resolved)
+
+  if (phase3.action === "has_contradictions") {
+    return {
+      session_id: newSession.id,
+      status: "has_contradictions",
+      contradictions: phase3.contradictions,
+    }
   }
 
-  const updatedAisp = parsed.aisp ?? existingAisp
-  const scores = await computeScores(updatedAisp)
-  const contradictions = await detectContradictions(updatedAisp, provider, apiKey, mainModel, llmOpts)
-
-  return {
-    purified: parsed.purified,
-    aisp: updatedAisp,
-    scores,
-    diff: parsed.diff ?? [],
-    contradictions,
+  if (phase3.action === "needs_clarification") {
+    return {
+      session_id: newSession.id,
+      status: "needs_clarification",
+      questions: phase3.questions,
+    }
   }
+
+  return { session_id: newSession.id, status: "ready" }
 }
 
 // ── purify_init ────────────────────────────────────────────────────────────────
@@ -291,7 +546,7 @@ export async function initContext(
   filePaths: string[],
   opts: LLMOpts,
 ): Promise<{ context_file: string; summary: string }> {
-  const { provider, mainModel, apiKey, baseUrl, openaiUser, insecure } = resolveOpts(opts)
+  const resolved = resolveOpts(opts)
 
   const fileContents: string[] = []
   const readErrors: string[] = []
@@ -306,7 +561,10 @@ export async function initContext(
   }
 
   if (fileContents.length === 0) {
-    const errMsg = readErrors.length > 0 ? `Could not read any files:\n${readErrors.join("\n")}` : "No files provided"
+    const errMsg =
+      readErrors.length > 0
+        ? `Could not read any files:\n${readErrors.join("\n")}`
+        : "No files provided"
     throw new Error(errMsg)
   }
 
@@ -315,11 +573,15 @@ export async function initContext(
     userContent += `\n\nNote: The following files could not be read:\n${readErrors.join("\n")}`
   }
 
-  const raw = await callLLM(provider, apiKey, mainModel, INIT_SYSTEM, userContent, {
-    baseUrl,
-    openaiUser,
-    insecure,
-  })
+  const raw = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    INIT_SYSTEM,
+    [{ role: "user", content: userContent }],
+    undefined,
+    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+  )
 
   try {
     return parseJSON<{ context_file: string; summary: string }>(raw)

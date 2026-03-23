@@ -338,3 +338,64 @@ extends a spec, integrate the changes and return the complete current specificat
 Each user message is an AISP document representing their intent.`
   )
 }
+
+// ── V3: Session pipeline prompts ───────────────────────────────────────────────
+
+// System prompt for purify sessions: AISP spec + optional domain context.
+// Cached for the session lifetime. No translation-direction instructions —
+// those are in the user turns.
+export function getSessionSystemPrompt(context?: string): string {
+  if (context) {
+    return `${AISP_SPEC}\n\nDOMAIN CONTEXT:\n${context}`
+  }
+  return AISP_SPEC
+}
+
+// PurifyTurn content: instruction + raw text
+export function buildPurifyTurnContent(text: string): string {
+  return `Translate the following to AISP 5.1. Output only the AISP document.\n\n${text}`
+}
+
+// QuestionRequestTurn content: validation summary + question instruction
+export function buildQuestionRequestContent(validationSummary: string): string {
+  return (
+    `${validationSummary}\n\n` +
+    `Generate clarifying questions for the gaps and contradictions above. ` +
+    `Output as a JSON array, no markdown fences:\n` +
+    `[{"priority":"REQUIRED|OPTIONAL","question":"specific answerable question"}]\n\n` +
+    `REQUIRED = blocks meaningful use. OPTIONAL = improves quality. ` +
+    `Binary or multiple-choice preferred. Maximum 7 questions total.`
+  )
+}
+
+// AnswersTurn content: Q&A pairs + refinement instruction
+export function buildAnswersTurnContent(
+  answers: Array<{ question: string; answer: string }>,
+): string {
+  const pairs = answers
+    .map((a, i) => `Q${i + 1}: ${a.question}\nA${i + 1}: ${a.answer}`)
+    .join("\n\n")
+  return (
+    `Answers to clarifying questions:\n\n${pairs}\n\n` +
+    `Update the AISP document to incorporate these answers. Output only the updated AISP document.`
+  )
+}
+
+// TranslateTurn content: output format + translate instruction
+export function buildTranslateTurnContent(format: string): string {
+  return (
+    `${format}\n\n` +
+    `Translate the above AISP to natural language following the output format above. ` +
+    `No hedge words (typically, usually, often, generally, might, may, could, probably). ` +
+    `No preamble. Start with the first section heading. ` +
+    `Output only the translated English text.`
+  )
+}
+
+// UpdateTurn content: change description
+export function buildUpdateTurnContent(change: string): string {
+  return (
+    `Update the AISP to incorporate the following change. ` +
+    `Output only the updated AISP document.\n\nCHANGE:\n${change}`
+  )
+}

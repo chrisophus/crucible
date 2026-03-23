@@ -1,6 +1,8 @@
 #!/usr/bin/env tsx
 /**
- * purify MCP server — exposes purify spec purification as MCP tools
+ * purify MCP server — v3 session-based pipeline
+ *
+ * Tools: purify_run, purify_clarify, purify_translate, purify_update, purify_init
  *
  * Usage (stdio transport):
  *   purify-mcp
@@ -28,178 +30,67 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js"
 
-import { purify } from "./core.ts"
 import {
-  clarifyTranslation,
   initContext,
-  reflectText,
-  translateText,
-  updatePurified,
+  runClarifyPipeline,
+  runPurifyPipeline,
+  runTranslatePipeline,
+  runUpdatePipeline,
 } from "./core-tools.ts"
-import { DEFAULT_CHEAP_MODELS, DEFAULT_MODELS } from "./providers.ts"
-import type { Mode, Provider } from "./types.ts"
-import { parseEvidence, runValidator } from "./validator.ts"
-
-const VALID_MODES: Mode[] = [
-  "formal",
-  "narrative",
-  "hybrid",
-  "sketch",
-  "summary",
-]
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function resolveApiKey(provider: Provider): string {
-  const envVars: Record<Provider, string> = {
-    anthropic: "ANTHROPIC_API_KEY",
-    openai: "OPENAI_API_KEY",
-  }
-  const key = process.env[envVars[provider]]
-  if (!key)
-    throw new Error(`${envVars[provider]} environment variable is not set`)
-  return key
-}
+import type { Config } from "./types.ts"
+import { DEFAULT_CONFIG } from "./types.ts"
 
 // ── Tool definitions ───────────────────────────────────────────────────────────
 
 const TOOLS: Tool[] = [
   {
-    name: "purify_spec",
+    name: "purify_run",
     description:
-      "Purify a specification by translating it through AISP 5.1 (AI Symbolic Protocol) " +
-      "to expose hidden ambiguities. Returns a quality score and the purified English version " +
-      "of the specification. The round-trip process forces every constraint, enumeration, and " +
-      "relationship to be explicit, reducing ambiguity.",
+      "Start a purify session. Translates natural language through AISP to expose ambiguity, " +
+      "validates the result, and returns immediately with one of: " +
+      "status=ready (call purify_translate next), " +
+      "status=needs_clarification (questions returned — collect author answers and call purify_clarify), " +
+      "status=has_contradictions (contradictions returned — surface to author and resolve before resubmitting). " +
+      "The session accumulates conversation context for prompt caching across all subsequent calls.",
     inputSchema: {
       type: "object",
       properties: {
         text: {
           type: "string",
-          description:
-            "The specification text to purify (English prose or markdown)",
-        },
-        mode: {
-          type: "string",
-          enum: VALID_MODES,
-          description:
-            "Output mode for the purified English. " +
-            "formal=structured tables; narrative=flowing prose (default); " +
-            "hybrid=balanced; sketch=high-level bullets; summary=plain executive summary",
-          default: "narrative",
-        },
-        provider: {
-          type: "string",
-          enum: ["anthropic", "openai"],
-          description: "LLM provider to use (default: anthropic)",
-          default: "anthropic",
-        },
-        model: {
-          type: "string",
-          description:
-            "Main model for AISP→English step (default: claude-sonnet-4-6)",
-        },
-        purify_model: {
-          type: "string",
-          description:
-            "Cheap model for English→AISP step (default: claude-haiku-4-5-20251001)",
-        },
-        from_aisp: {
-          type: "boolean",
-          description:
-            "Set to true if the input is already an AISP document (skip step 1)",
-          default: false,
-        },
-      },
-      required: ["text"],
-    },
-  },
-  {
-    name: "validate_aisp",
-    description:
-      "Validate an AISP 5.1 document and compute its semantic density score (δ). " +
-      "Returns validity, delta score (0–1), quality tier, and ambiguity metric. " +
-      "Tiers: ◊⁺⁺ platinum (δ≥0.75), ◊⁺ gold (δ≥0.60), ◊ silver (δ≥0.40), " +
-      "◊⁻ bronze (δ≥0.20), ⊘ invalid (δ<0.20).",
-    inputSchema: {
-      type: "object",
-      properties: {
-        aisp: {
-          type: "string",
-          description: "The AISP 5.1 document to validate",
-        },
-      },
-      required: ["aisp"],
-    },
-  },
-  {
-    name: "purify_reflect",
-    description:
-      "Step 1 of the translation loop. The model states its interpretation of the text " +
-      "BEFORE formalizing it, so the author can correct any misunderstandings. " +
-      "Returns interpretation, explicit assumptions, and uncertainties. " +
-      "Never attempts formalization or generates AISP.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        text: {
-          type: "string",
-          description: "The raw text to interpret",
+          description: "The raw specification text to purify",
         },
         context: {
           type: "string",
-          description: "Optional project domain context from purify.context.md",
+          description:
+            "Optional domain context from purify.context.md. Injected as cached system prompt.",
         },
-        provider: {
-          type: "string",
-          enum: ["anthropic", "openai"],
-          description: "LLM provider (default: anthropic)",
-          default: "anthropic",
-        },
-        model: {
-          type: "string",
-          description: "Model to use (default: claude-sonnet-4-6)",
-        },
-      },
-      required: ["text"],
-    },
-  },
-  {
-    name: "purify_translate",
-    description:
-      "Step 2 of the translation loop. Translates natural language through AISP to precise English. " +
-      "Returns purified English, AISP intermediate, quality scores (δ, φ, τ), " +
-      "contradiction list (blocks output if non-empty), and clarification questions. " +
-      "Scores: ◊⁺⁺ platinum (δ≥0.75,φ≥95), ◊⁺ gold (δ≥0.60,φ≥80), " +
-      "◊ silver (δ≥0.40,φ≥65), ◊⁻ bronze (δ≥0.20,φ≥40), ⊘ invalid.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        text: {
-          type: "string",
-          description: "The raw text to translate",
-        },
-        context: {
-          type: "string",
-          description: "Optional project domain context from purify.context.md",
-        },
-        interpretation: {
-          type: "string",
-          description: "Corrected interpretation from a prior purify_reflect call",
-        },
-        provider: {
-          type: "string",
-          enum: ["anthropic", "openai"],
-          description: "LLM provider (default: anthropic)",
-          default: "anthropic",
-        },
-        model: {
-          type: "string",
-          description: "Main model for AISP→English step (default: claude-sonnet-4-6)",
-        },
-        cheap_model: {
-          type: "string",
-          description: "Cheap model for English→AISP step (default: claude-haiku-4-5-20251001)",
+        config: {
+          type: "object",
+          description: "Optional pipeline configuration. Defaults: on_low_score / ◊ / true / 2",
+          properties: {
+            clarification_mode: {
+              type: "string",
+              enum: ["always", "on_low_score", "never"],
+              description:
+                "When to generate clarifying questions. " +
+                "on_low_score: only when below threshold (default). " +
+                "always: whenever below threshold regardless of round. " +
+                "never: proceed directly to translate.",
+            },
+            score_threshold: {
+              type: "string",
+              enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"],
+              description: "Minimum tier to proceed without clarification (default: ◊ silver)",
+            },
+            ask_on_contradiction: {
+              type: "boolean",
+              description: "If true, return has_contradictions instead of proceeding (default: true)",
+            },
+            max_clarify_rounds: {
+              type: "number",
+              description: "Maximum clarification rounds before proceeding (default: 2)",
+            },
+          },
         },
       },
       required: ["text"],
@@ -208,23 +99,21 @@ const TOOLS: Tool[] = [
   {
     name: "purify_clarify",
     description:
-      "Iterative refinement step. Takes an existing AISP document and answers to clarifying questions, " +
-      "then returns an updated translation with improved scores. " +
-      "Repeat until τ ≥ ◊⁺ or the author accepts the current tier.",
+      "Submit answers to clarifying questions and re-run validation. " +
+      "Call this after purify_run or purify_clarify returns status=needs_clarification. " +
+      "The session conversation is updated with answers and a refined AISP. " +
+      "Returns the same status variants as purify_run. " +
+      "When status=ready, call purify_translate to get the final purified English.",
     inputSchema: {
       type: "object",
       properties: {
-        aisp: {
+        session_id: {
           type: "string",
-          description: "The existing AISP document from a prior purify_translate or purify_clarify call",
-        },
-        context: {
-          type: "string",
-          description: "Optional project domain context from purify.context.md",
+          description: "Session ID from the prior purify_run or purify_clarify call",
         },
         answers: {
           type: "array",
-          description: "Answers to the clarifying questions from the prior translation result",
+          description: "Answers to the clarifying questions",
           items: {
             type: "object",
             properties: {
@@ -234,57 +123,70 @@ const TOOLS: Tool[] = [
             required: ["question", "answer"],
           },
         },
-        provider: {
+      },
+      required: ["session_id", "answers"],
+    },
+  },
+  {
+    name: "purify_translate",
+    description:
+      "Translate the purified AISP to natural language. " +
+      "Call this when purify_run or purify_clarify returns status=ready. " +
+      "Uses the full accumulated session conversation as context for faithful translation. " +
+      "Returns the purified English text.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: {
           type: "string",
-          enum: ["anthropic", "openai"],
-          description: "LLM provider (default: anthropic)",
-          default: "anthropic",
+          description: "Session ID from the prior purify_run or purify_clarify call",
         },
-        model: {
+        format: {
           type: "string",
-          description: "Model to use (default: claude-sonnet-4-6)",
+          description:
+            'Output format description or example. Use "preserve input format" to match the original. ' +
+            "Can specify a mode: formal (tables/steps), narrative (prose), hybrid, sketch, or summary.",
+          default: "preserve input format",
         },
       },
-      required: ["aisp", "answers"],
+      required: ["session_id"],
     },
   },
   {
     name: "purify_update",
     description:
-      "Updates existing purified content in place. Edits only the affected sections — " +
-      "never regenerates from scratch. Preserves the style, spirit, and flow of unchanged sections. " +
-      "Returns the updated purified text, updated AISP, scores, a section-level diff, and contradiction check.",
+      "Update an existing purified spec by applying a change. " +
+      "Seeds a new session from the previous session's conversation, " +
+      "appends the change as a new turn, and re-runs the full pipeline. " +
+      "Returns the same status variants as purify_run — follow the same " +
+      "clarify/translate flow to get the updated purified text.",
     inputSchema: {
       type: "object",
       properties: {
-        existing_purified: {
+        session_id: {
           type: "string",
-          description: "The current purified English text to update",
-        },
-        existing_aisp: {
-          type: "string",
-          description: "The current AISP document corresponding to the purified text",
+          description: "Session ID from the previous completed purify session",
         },
         change: {
           type: "string",
-          description: "Natural language description of the requested change",
+          description: "Natural language description of the change to apply",
         },
         context: {
           type: "string",
-          description: "Optional project domain context from purify.context.md",
+          description: "Optional updated domain context from purify.context.md",
         },
-        provider: {
-          type: "string",
-          enum: ["anthropic", "openai"],
-          description: "LLM provider (default: anthropic)",
-          default: "anthropic",
-        },
-        model: {
-          type: "string",
-          description: "Model to use (default: claude-sonnet-4-6)",
+        config: {
+          type: "object",
+          description: "Optional pipeline configuration for the new session",
+          properties: {
+            clarification_mode: { type: "string", enum: ["always", "on_low_score", "never"] },
+            score_threshold: { type: "string", enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"] },
+            ask_on_contradiction: { type: "boolean" },
+            max_clarify_rounds: { type: "number" },
+          },
         },
       },
-      required: ["existing_purified", "existing_aisp", "change"],
+      required: ["session_id", "change"],
     },
   },
   {
@@ -292,7 +194,7 @@ const TOOLS: Tool[] = [
     description:
       "One-time project setup. Reads existing project files (specs, schemas, docs, AISP files) " +
       "and generates the content for purify.context.md — a domain model that improves all subsequent " +
-      "purify calls for this project.",
+      "purify sessions for this project. Pass the file path to purify_run as the context parameter.",
     inputSchema: {
       type: "object",
       properties: {
@@ -301,34 +203,8 @@ const TOOLS: Tool[] = [
           description: "Absolute or relative paths to project files to extract context from",
           items: { type: "string" },
         },
-        provider: {
-          type: "string",
-          enum: ["anthropic", "openai"],
-          description: "LLM provider (default: anthropic)",
-          default: "anthropic",
-        },
-        model: {
-          type: "string",
-          description: "Model to use (default: claude-sonnet-4-6)",
-        },
       },
       required: ["files"],
-    },
-  },
-  {
-    name: "parse_aisp_evidence",
-    description:
-      "Extract the self-reported quality evidence from an AISP 5.1 document's ⟦Ε⟧ block. " +
-      "Returns the delta score and tier symbol reported by the model that generated the AISP.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        aisp: {
-          type: "string",
-          description: "The AISP 5.1 document to parse",
-        },
-      },
-      required: ["aisp"],
     },
   },
 ]
@@ -336,7 +212,7 @@ const TOOLS: Tool[] = [
 // ── Server setup ───────────────────────────────────────────────────────────────
 
 const server = new Server(
-  { name: "purify", version: "1.0.0" },
+  { name: "purify", version: "2.0.0" },
   { capabilities: { tools: {} } },
 )
 
@@ -346,161 +222,51 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
 
   try {
-    if (name === "purify_reflect") {
-      const { text, context, provider = "anthropic", model } = args as {
+    if (name === "purify_run") {
+      const { text, context, config: configInput } = args as {
         text: string
         context?: string
-        provider?: Provider
-        model?: string
+        config?: Partial<Config>
       }
-      const result = await reflectText(text, context, { provider, model })
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
-    }
-
-    if (name === "purify_translate") {
-      const {
-        text,
-        context,
-        interpretation,
-        provider = "anthropic",
-        model,
-        cheap_model,
-      } = args as {
-        text: string
-        context?: string
-        interpretation?: string
-        provider?: Provider
-        model?: string
-        cheap_model?: string
-      }
-      const result = await translateText(text, context, interpretation, {
-        provider,
-        model,
-        cheapModel: cheap_model,
-      })
+      const config: Config = { ...DEFAULT_CONFIG, ...configInput }
+      const result = await runPurifyPipeline(text, context, config, {})
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
     }
 
     if (name === "purify_clarify") {
-      const {
-        aisp,
-        context,
-        answers,
-        provider = "anthropic",
-        model,
-      } = args as {
-        aisp: string
-        context?: string
+      const { session_id, answers } = args as {
+        session_id: string
         answers: Array<{ question: string; answer: string }>
-        provider?: Provider
-        model?: string
       }
-      const result = await clarifyTranslation(aisp, context, answers, { provider, model })
+      const result = await runClarifyPipeline(session_id, answers, {})
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
+    if (name === "purify_translate") {
+      const { session_id, format = "preserve input format" } = args as {
+        session_id: string
+        format?: string
+      }
+      const result = await runTranslatePipeline(session_id, format, {})
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
     }
 
     if (name === "purify_update") {
-      const {
-        existing_purified,
-        existing_aisp,
-        change,
-        context,
-        provider = "anthropic",
-        model,
-      } = args as {
-        existing_purified: string
-        existing_aisp: string
+      const { session_id, change, context, config: configInput } = args as {
+        session_id: string
         change: string
         context?: string
-        provider?: Provider
-        model?: string
+        config?: Partial<Config>
       }
-      const result = await updatePurified(existing_purified, existing_aisp, change, context, {
-        provider,
-        model,
-      })
+      const config: Config = { ...DEFAULT_CONFIG, ...configInput }
+      const result = await runUpdatePipeline(session_id, change, context, config, {})
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
     }
 
     if (name === "purify_init") {
-      const { files, provider = "anthropic", model } = args as {
-        files: string[]
-        provider?: Provider
-        model?: string
-      }
-      const result = await initContext(files, { provider, model })
+      const { files } = args as { files: string[] }
+      const result = await initContext(files, {})
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
-    }
-
-    if (name === "purify_spec") {
-      const {
-        text,
-        mode = "narrative",
-        provider = "anthropic",
-        model,
-        purify_model,
-        from_aisp = false,
-      } = args as {
-        text: string
-        mode?: Mode
-        provider?: Provider
-        model?: string
-        purify_model?: string
-        from_aisp?: boolean
-      }
-
-      const resolvedProvider = provider as Provider
-      const mainModel =
-        model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[resolvedProvider]
-      const purifyModel =
-        purify_model ??
-        process.env.PURIFY_MODEL_CHEAP ??
-        DEFAULT_CHEAP_MODELS[resolvedProvider]
-      const apiKey = resolveApiKey(resolvedProvider)
-
-      const result = await purify({
-        text,
-        provider: resolvedProvider,
-        mainModel,
-        purifyModel,
-        apiKey,
-        verbose: false,
-        mode: mode as Mode,
-        fromAisp: from_aisp,
-        baseUrl: process.env.OPENAI_BASE_URL,
-        openaiUser: process.env.OPENAI_USER,
-        insecure: process.env.OPENAI_INSECURE === "1",
-      })
-
-      return {
-        content: [{ type: "text", text: result }],
-      }
-    }
-
-    if (name === "validate_aisp") {
-      const { aisp } = args as { aisp: string }
-      const result = await runValidator(aisp)
-      if (!result) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({ error: "validator unavailable" }),
-            },
-          ],
-        }
-      }
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      }
-    }
-
-    if (name === "parse_aisp_evidence") {
-      const { aisp } = args as { aisp: string }
-      const evidence = parseEvidence(aisp)
-      return {
-        content: [{ type: "text", text: JSON.stringify(evidence, null, 2) }],
-      }
     }
 
     return {
