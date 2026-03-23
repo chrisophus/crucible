@@ -354,18 +354,51 @@ async function callLLM(
   model: string,
   system: string,
   user: string,
+  opts: { streamTo?: NodeJS.WritableStream; thinking?: boolean } = {},
 ): Promise<string> {
+  const { streamTo, thinking } = opts
   if (provider === "anthropic") {
     const client = new Anthropic({ apiKey })
-    const msg = await client.messages.create({
+    const params = {
       model,
-      max_tokens: 8096,
-      system,
-      messages: [{ role: "user", content: user }],
-    })
-    return (msg.content[0] as { text: string }).text
+      max_tokens: thinking ? 16000 : 8096,
+      system: [{ type: "text" as const, text: system, cache_control: { type: "ephemeral" as const } }],
+      messages: [{ role: "user" as const, content: user }],
+      ...(thinking ? { thinking: { type: "enabled" as const, budget_tokens: 8000 }, betas: ["interleaved-thinking-2025-05-14"] } : {}),
+    } as Parameters<typeof client.messages.create>[0]
+    if (streamTo) {
+      const stream = client.messages.stream(params)
+      let text = ""
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          streamTo.write(event.delta.text)
+          text += event.delta.text
+        }
+      }
+      return text
+    }
+    const msg = await client.messages.create(params)
+    const textBlock = msg.content.find((b: { type: string }) => b.type === "text") as { type: "text"; text: string } | undefined
+    return textBlock?.text ?? ""
   } else {
     const client = new OpenAI({ apiKey })
+    if (streamTo) {
+      const stream = await client.chat.completions.create({
+        model,
+        max_tokens: 8096,
+        messages: [
+          { role: "system", content: system },
+          { role: "user",   content: user },
+        ],
+        stream: true,
+      })
+      let text = ""
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content ?? ""
+        if (delta) { streamTo.write(delta); text += delta }
+      }
+      return text
+    }
     const resp = await client.chat.completions.create({
       model,
       max_tokens: 8096,
@@ -385,6 +418,7 @@ async function callLLMRepl(
   model: string,
   system: string,
   messages: ConvMessage[],
+  streamTo?: NodeJS.WritableStream,
 ): Promise<string> {
   if (provider === "anthropic") {
     const client = new Anthropic({ apiKey })
@@ -398,15 +432,41 @@ async function callLLMRepl(
           : [{ type: "text" as const, text: m.content, cache_control: { type: "ephemeral" as const } }],
       }
     })
-    const msg = await client.messages.create({
+    const params = {
       model,
       max_tokens: 8096,
       system: [{ type: "text" as const, text: system, cache_control: { type: "ephemeral" as const } }],
       messages: anthropicMsgs,
-    } as Parameters<typeof client.messages.create>[0])
+    } as Parameters<typeof client.messages.create>[0]
+    if (streamTo) {
+      const stream = client.messages.stream(params)
+      let text = ""
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+          streamTo.write(event.delta.text)
+          text += event.delta.text
+        }
+      }
+      return text
+    }
+    const msg = await client.messages.create(params)
     return (msg.content[0] as { text: string }).text
   } else {
     const client = new OpenAI({ apiKey })
+    if (streamTo) {
+      const stream = await client.chat.completions.create({
+        model,
+        max_tokens: 8096,
+        messages: [{ role: "system", content: system }, ...messages],
+        stream: true,
+      })
+      let text = ""
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content ?? ""
+        if (delta) { streamTo.write(delta); text += delta }
+      }
+      return text
+    }
     const resp = await client.chat.completions.create({
       model,
       max_tokens: 8096,
@@ -414,6 +474,69 @@ async function callLLMRepl(
     })
     return resp.choices[0].message.content ?? ""
   }
+}
+
+// ── Validator tool use (Anthropic-only, Step 1) ───────────────────────────────
+
+const VALIDATOR_TOOL = {
+  name: "validate_aisp",
+  description: "Validate an AISP 5.1 document and return semantic density (δ) and tier. Call after generating AISP to check quality before finalizing.",
+  input_schema: {
+    type: "object" as const,
+    properties: {
+      aisp: { type: "string", description: "The complete AISP 5.1 document to validate" },
+    },
+    required: ["aisp"],
+  },
+}
+
+const TO_AISP_SYSTEM_WITH_TOOLS = TO_AISP_SYSTEM + `
+
+After generating the AISP document, call validate_aisp with it to check semantic density.
+If δ < 0.40, revise the document and call validate_aisp once more.
+Output your final AISP as plain text when done.`
+
+async function callLLMWithTools(
+  apiKey: string,
+  model: string,
+  user: string,
+): Promise<string> {
+  const client = new Anthropic({ apiKey })
+  const msgs: Parameters<typeof client.messages.create>[0]["messages"] = [
+    { role: "user", content: user },
+  ]
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const resp = await client.messages.create({
+      model,
+      max_tokens: 8096,
+      system: [{ type: "text" as const, text: TO_AISP_SYSTEM_WITH_TOOLS, cache_control: { type: "ephemeral" as const } }],
+      tools: [VALIDATOR_TOOL],
+      messages: msgs,
+    } as Parameters<typeof client.messages.create>[0])
+
+    if (resp.stop_reason !== "tool_use") {
+      const textBlock = (resp.content as Array<{ type: string }>).find(b => b.type === "text") as { type: "text"; text: string } | undefined
+      return textBlock?.text ?? ""
+    }
+
+    msgs.push({ role: "assistant", content: resp.content as Parameters<typeof client.messages.create>[0]["messages"][number]["content"] })
+
+    const toolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string }> = []
+    for (const block of resp.content) {
+      if (block.type === "tool_use" && block.name === "validate_aisp") {
+        const input = block.input as { aisp: string }
+        const result = await runValidator(input.aisp)
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: block.id,
+          content: JSON.stringify(result ?? { error: "validator unavailable" }),
+        })
+      }
+    }
+    msgs.push({ role: "user", content: toolResults as Parameters<typeof client.messages.create>[0]["messages"][number]["content"] })
+  }
+  throw new Error("unreachable")
 }
 
 // ── Core ──────────────────────────────────────────────────────────────────────
@@ -431,8 +554,10 @@ async function purify(opts: {
   verbose: boolean
   mode: Mode
   fromAisp?: boolean
+  thinking?: boolean
+  stream?: boolean
 }): Promise<string> {
-  const { text, provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp } = opts
+  const { text, provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, thinking, stream } = opts
 
   let aisp: string
   if (fromAisp) {
@@ -441,8 +566,11 @@ async function purify(opts: {
     eprint("→ skipping purification (--from-aisp)", verbose)
   } else {
     // Step 1: English → AISP (cheap model)
+    // Anthropic: use tool-use loop so the model can self-validate and revise
     eprint(`→ purifying (${purifyModel})...`, verbose)
-    aisp = await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, text)
+    aisp = provider === "anthropic"
+      ? await callLLMWithTools(apiKey, purifyModel, text)
+      : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, text)
   }
 
   if (verbose) {
@@ -486,15 +614,19 @@ async function purify(opts: {
   }
   eprint(`→ quality: ${authoritativeTierSymbol} ${authoritativeTierName} (${deltaStr}${selfDeltaStr})`, verbose)
 
-  // Step 2: AISP → English or clarifying questions (main model)
-  eprint(`→ translating back (${mainModel})...`, verbose)
-  const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp)
+  const qualityHeader = `QUALITY: ${authoritativeTierSymbol} ${authoritativeTierName} (${deltaStr}${selfDeltaStr})`
 
-  return [
-    `QUALITY: ${authoritativeTierSymbol} ${authoritativeTierName} (${deltaStr}${selfDeltaStr})`,
-    "---",
-    english,
-  ].join("\n")
+  // Step 3: AISP → English or clarifying questions (main model)
+  eprint(`→ translating back (${mainModel})...`, verbose)
+  if (stream) {
+    process.stdout.write(qualityHeader + "\n---\n")
+    const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp, { streamTo: process.stdout, thinking })
+    return qualityHeader + "\n---\n" + english
+  }
+
+  const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp, { thinking })
+
+  return [qualityHeader, "---", english].join("\n")
 }
 
 // ── CLI ───────────────────────────────────────────────────────────────────────
@@ -598,6 +730,8 @@ function parseArgs(argv: string[]) {
     fromAisp:     false,
     repl:         false,
     suggest:      false,
+    thinking:     false,
+    estimate:     false,
     help:         false,
   }
 
@@ -608,6 +742,8 @@ function parseArgs(argv: string[]) {
     else if (a === "--from-aisp")               { opts.fromAisp = true }
     else if (a === "--repl")                    { opts.repl = true }
     else if (a === "--suggest")                 { opts.suggest = true }
+    else if (a === "--thinking")                { opts.thinking = true }
+    else if (a === "--estimate")                { opts.estimate = true }
     else if (a === "--provider")                { opts.provider = args[++i] as Provider }
     else if (a === "--model")                   { opts.model = args[++i] }
     else if (a === "--purify-model")            { opts.purifyModel = args[++i] }
@@ -658,6 +794,8 @@ Options:
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
   --suggest      show purified version then suggest changes applied to the original
+  --thinking     enable extended thinking for Step 3 (Anthropic Sonnet/Opus only)
+  --estimate     count input tokens for Step 1 and exit without calling the main model
   --verbose      write AISP and scores to stderr
   --help
 
@@ -744,10 +882,13 @@ async function runRepl(opts: {
 
     try {
       // Step 1: English → AISP (unless --from-aisp)
+      // Anthropic: use tool-use loop so the model can self-validate and revise
       let aisp = input
       if (!fromAisp) {
         process.stderr.write(`→ purifying (${purifyModel})...\n`)
-        aisp = await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, input)
+        aisp = provider === "anthropic"
+          ? await callLLMWithTools(apiKey, purifyModel, input)
+          : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, input)
       }
 
       if (verbose) {
@@ -766,13 +907,14 @@ async function runRepl(opts: {
       const selfStr   = self.delta !== null ? `, self_δ=${self.delta.toFixed(2)}` : ""
       process.stderr.write(`QUALITY: ${tierSym} ${tierName} (${deltaStr}${selfStr})\n`)
 
-      // Step 2: AISP → English via main model with full conversation history
+      // Step 3: AISP → English via main model with full conversation history (streamed)
       messages.push({ role: "user", content: aisp })
       process.stderr.write(`→ translating (${mainModel})...\n`)
-      const response = await callLLMRepl(provider, apiKey, mainModel, getReplSystem(mode), messages)
+      process.stdout.write("\n")
+      const response = await callLLMRepl(provider, apiKey, mainModel, getReplSystem(mode), messages, process.stdout)
       messages.push({ role: "assistant", content: response })
 
-      process.stdout.write("\n" + response + "\n\n")
+      process.stdout.write("\n\n")
     } catch (err) {
       process.stderr.write(`error: ${(err as Error).message}\n`)
       // Roll back the user message if we never got a response
@@ -929,10 +1071,28 @@ async function main() {
   const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP  ?? DEFAULT_CHEAP_MODELS[provider]
   const apiKey     = resolveApiKey(provider, opts.apiKey)
 
+  if (opts.estimate) {
+    if (provider !== "anthropic") {
+      process.stderr.write("error: --estimate is only supported with --provider anthropic\n")
+      process.exit(1)
+    }
+    const client = new Anthropic({ apiKey })
+    const count = await client.messages.countTokens({
+      model: purifyModel,
+      system: TO_AISP_SYSTEM_WITH_TOOLS,
+      messages: [{ role: "user", content: text! }],
+    })
+    process.stdout.write(
+      `Step 1 input tokens (${purifyModel}): ${count.input_tokens}\n` +
+      `(Step 3 tokens depend on AISP output — run without --estimate for full output)\n`,
+    )
+    process.exit(0)
+  }
+
   eprint(`purify: provider=${provider} purify=${purifyModel} main=${mainModel} mode=${opts.mode}`, opts.verbose)
 
   try {
-    const result = await purify({
+    await purify({
       text: text!,
       provider,
       mainModel,
@@ -941,8 +1101,10 @@ async function main() {
       apiKey,
       verbose: opts.verbose,
       mode: opts.mode,
+      thinking: opts.thinking,
+      stream: true,
     })
-    console.log(result)
+    process.stdout.write("\n")
   } catch (err) {
     process.stderr.write(`error: ${(err as Error).message}\n`)
     process.exit(1)
