@@ -268,11 +268,49 @@ async function generateQuestions(
     },
   )
 
-  let questions: Question[] = []
+  // Parse and validate questions from the model response. Fall back to a safe
+  // single optional question if parsing or validation fails.
+  let questions: Question[]
   try {
-    questions = parseJSON<Question[]>(raw)
+    const parsed = parseJSON<unknown>(raw)
+
+    const sanitizeQuestions = (value: unknown): Question[] | null => {
+      if (!Array.isArray(value)) return null
+
+      const allowedPriorities = new Set<string>(["MANDATORY", "OPTIONAL"])
+      const result: Question[] = []
+
+      for (const item of value) {
+        if (!item || typeof item !== "object") continue
+
+        const q: unknown = (item as any).question
+        const p: unknown = (item as any).priority
+
+        if (typeof q !== "string" || q.trim().length === 0) continue
+        if (typeof p !== "string" || !allowedPriorities.has(p)) continue
+
+        result.push({ question: q.trim(), priority: p as Question["priority"] })
+
+        if (result.length >= 7) break
+      }
+
+      return result.length > 0 ? result : null
+    }
+
+    const validated = sanitizeQuestions(parsed)
+    if (!validated) {
+      throw new Error("Invalid questions payload")
+    }
+
+    questions = validated
   } catch {
-    questions = [{ priority: "OPTIONAL", question: raw.trim() }]
+    questions = [
+      {
+        priority: "OPTIONAL",
+        question:
+          "Please provide any additional information or clarifications you think are missing from your previous answer.",
+      },
+    ]
   }
 
   session.messages.push({ role: "assistant", content: raw })
@@ -287,7 +325,12 @@ async function incorporateAnswers(
   answers: Array<{ question: string; answer: string }>,
   resolved: ResolvedOpts,
 ): Promise<string> {
-  const userContent = buildAnswersTurnContent(answers)
+  const answersContent = buildAnswersTurnContent(answers)
+  const aispSnippet =
+    session.aisp_current && session.aisp_current.trim().length > 0
+      ? `\n\nHere is the current AISP document that you must update:\n\n${session.aisp_current}`
+      : ""
+  const userContent = `${answersContent}${aispSnippet}`
   session.messages.push({ role: "user", content: userContent })
 
   const refinedAisp = await callLLMRepl(
@@ -488,7 +531,10 @@ export async function runUpdatePipeline(
   const resolved = resolveOpts(opts)
 
   // Seed new session with previous conversation
-  const systemPrompt = getSessionSystemPrompt(context ?? undefined)
+  const systemPrompt =
+    context != null
+      ? getSessionSystemPrompt(context)
+      : prev.systemPrompt
   const newSession = createSession(systemPrompt, config)
   newSession.messages = [...prev.messages]
   saveSession(newSession)
