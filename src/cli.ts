@@ -39,6 +39,24 @@ import { runValidator, parseEvidence, TIER_NAMES } from "./validator.ts"
 import { TO_AISP_SYSTEM, APPLY_SUGGESTION_SYSTEM, getReplSystem } from "./prompts.ts"
 import type { Provider, Mode, ConvMessage } from "./types.ts"
 
+// ── Error logging ──────────────────────────────────────────────────────────────
+
+function logError(err: unknown): void {
+  if (err instanceof Error) {
+    process.stderr.write(`error: ${err.message}\n`)
+    // HTTP/network errors from Anthropic or OpenAI SDKs expose status + headers
+    const e = err as unknown as Record<string, unknown>
+    if (e["status"] !== undefined)  process.stderr.write(`  status: ${e["status"]}\n`)
+    if (e["code"]   !== undefined)  process.stderr.write(`  code: ${e["code"]}\n`)
+    if (e["url"]    !== undefined)  process.stderr.write(`  url: ${e["url"]}\n`)
+    // OpenAI APIError exposes the raw response body
+    if (e["error"]  !== undefined)  process.stderr.write(`  body: ${JSON.stringify(e["error"])}\n`)
+    if (err.cause   !== undefined)  process.stderr.write(`  cause: ${String(err.cause)}\n`)
+  } else {
+    process.stderr.write(`error: ${String(err)}\n`)
+  }
+}
+
 // ── CLI helpers ────────────────────────────────────────────────────────────────
 
 function resolveInput(positional: string[]): string | null {
@@ -320,7 +338,7 @@ async function runRepl(opts: {
 
       process.stdout.write("\n\n")
     } catch (err) {
-      process.stderr.write(`error: ${(err as Error).message}\n`)
+      logError(err)
       // Roll back the user message if we never got a response
       if (messages.at(-1)?.role === "user") messages.pop()
     }
@@ -426,7 +444,7 @@ async function runSuggest(opts: {
       process.stderr.write(`→ re-purifying...\n`)
       purifiedResult = await doPurify()
     } catch (err) {
-      process.stderr.write(`error: ${(err as Error).message}\n`)
+      logError(err)
     }
 
     process.stderr.write("➤ ")
@@ -517,7 +535,7 @@ async function main() {
     })
     process.stdout.write("\n")
   } catch (err) {
-    process.stderr.write(`error: ${(err as Error).message}\n`)
+    logError(err)
     process.exit(1)
   }
 }
