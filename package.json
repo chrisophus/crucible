@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "type": "module",
   "bin": {
-    "purify": "purify.ts",
-    "purify-mcp": "mcp-server.ts"
+    "purify": "src/cli.ts",
+    "purify-mcp": "src/mcp.ts"
   },
   "scripts": {
-    "dev": "node_modules/.bin/tsx purify.ts"
+    "dev": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
@@ -15,5 +16,9 @@
     "aisp-validator": "^0.3.0",
     "openai": "^4.0.0",
     "tsx": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
   }
 }

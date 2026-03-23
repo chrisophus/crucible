@@ -3,7 +3,7 @@
  * purify MCP server — exposes purify spec purification as MCP tools
  *
  * Usage (stdio transport):
- *   node mcp-server.ts
+ *   purify-mcp
  *
  * Environment:
  *   ANTHROPIC_API_KEY  OPENAI_API_KEY
@@ -13,8 +13,7 @@
  *   {
  *     "mcpServers": {
  *       "purify": {
- *         "command": "node",
- *         "args": ["/path/to/crucible/mcp-server.ts"],
+ *         "command": "purify-mcp",
  *         "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
  *       }
  *     }
@@ -29,16 +28,12 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js"
 
-import {
-  purify,
-  runValidator,
-  parseEvidence,
-  type Provider,
-  type Mode,
-  DEFAULT_MODELS,
-  DEFAULT_CHEAP_MODELS,
-  VALID_MODES,
-} from "./purify.ts"
+import { purify } from "./core.ts"
+import { runValidator, parseEvidence } from "./validator.ts"
+import { DEFAULT_MODELS, DEFAULT_CHEAP_MODELS } from "./providers.ts"
+import type { Provider, Mode } from "./types.ts"
+
+const VALID_MODES: Mode[] = ["formal", "narrative", "hybrid", "sketch", "summary"]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
