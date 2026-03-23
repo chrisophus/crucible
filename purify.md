@@ -71,7 +71,31 @@ All modes produce plain English output — no AISP notation appears in any mode.
 
 Default mode: `narrative`.
 
-**Override precedence:** `--mode <mode>` or shorthand `--<mode>` flag > `PURIFY_MODE` env var > `narrative`
+**Override precedence:** `--mode <mode>` or shorthand `--<mode>` flag > `--mode-file` (or `PURIFY_MODE_FILE`) > `PURIFY_MODE` env var > `narrative`
+
+A mode file is a skill markdown file that declares the mode via a `mode:` key in YAML frontmatter or a `## Mode` section. The five built-in mode files live in `.claude/skills/`:
+
+| File | Mode |
+|------|------|
+| `formal-mode.md` | `formal` |
+| `narrative-mode.md` | `narrative` |
+| `hybrid-mode.md` | `hybrid` |
+| `sketch-mode.md` | `sketch` |
+| `summary-mode.md` | `summary` |
+
+Example mode file:
+
+```markdown
+---
+mode: sketch
+---
+
+# Sketch Mode
+
+Short overview paragraph then a bullet list...
+```
+
+Point `PURIFY_MODE_FILE` at a mode file to make it the session default without passing a flag every time.
 
 ### InputSource
 
@@ -323,6 +347,7 @@ purify --repl
 | `--model <model>` | Main model for AISP → English (default: provider default) |
 | `--purify-model <model>` | Cheap model for English → AISP (default: provider default) |
 | `--mode formal\|narrative\|hybrid\|sketch\|summary` | Output rendering mode (default: narrative) |
+| `--mode-file <path>` | Path to a skill markdown file that specifies the mode |
 | `--formal` | Shorthand for `--mode formal` |
 | `--narrative` | Shorthand for `--mode narrative` |
 | `--hybrid` | Shorthand for `--mode hybrid` |
@@ -346,6 +371,7 @@ Unknown `--` flags cause an error and exit with code 1.
 | `PURIFY_MODEL` | Default main model |
 | `PURIFY_MODEL_CHEAP` | Default cheap model |
 | `PURIFY_MODE` | Default output mode |
+| `PURIFY_MODE_FILE` | Path to a skill markdown file that specifies the mode |
 | `AISP_GUIDE` | Path to AI_GUIDE.md |
 
 ### Constraints
