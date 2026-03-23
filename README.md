@@ -37,10 +37,13 @@ Requires Node.js. Make sure `~/.local/bin` is in your `PATH`.
 
 ```bash
 purify "inline text or requirement"
-purify spec.md
+purify -f spec.md
 cat spec.md | purify
 purify --repl
+purify --repl -f spec.md
 ```
+
+File input uses `-f` / `--input`. Positional arguments are always literal strings, not paths. Optional: `--feedback` (one-shot author context), `-o` / `--output` (write final English).
 
 ### MCP server (for Claude Desktop, Cursor, opencode, etc.)
 

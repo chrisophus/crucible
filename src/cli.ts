@@ -4,9 +4,12 @@
  * purify — AISP round-trip spec purification
  *
  * Usage:
- *   purify [options] [file]
- *   purify [options] "inline text"
+ *   purify [options] -f <path> | "inline text" | stdin
+ *   purify -f spec.md
+ *   purify "inline text"
  *   cat spec.md | purify [options]
+ *
+ * File input requires --input / -f; positional args are always literal strings (never paths).
  *
  * Options:
  *   --provider   anthropic | openai                        (default: anthropic)
@@ -37,6 +40,7 @@ import Anthropic from "@anthropic-ai/sdk"
 import { eprint, purify } from "./core.ts"
 import {
   APPLY_SUGGESTION_SYSTEM,
+  formatPrimaryWithAuthorContext,
   getReplSystem,
   TO_AISP_SYSTEM,
 } from "./prompts.ts"
@@ -46,6 +50,7 @@ import {
   callLLMWithTools,
   DEFAULT_CHEAP_MODELS,
   DEFAULT_MODELS,
+  TO_AISP_SYSTEM_WITH_TOOLS,
 } from "./providers.ts"
 import type { ConvMessage, Mode, Provider } from "./types.ts"
 import { parseEvidence, runValidator, TIER_NAMES } from "./validator.ts"
@@ -72,18 +77,66 @@ function logError(err: unknown): void {
 
 // ── CLI helpers ────────────────────────────────────────────────────────────────
 
-function resolveInput(positional: string[]): string | null {
-  if (positional.length > 0) {
-    const joined = positional.join(" ")
-    if (positional.length === 1 && existsSync(positional[0])) {
-      return readFileSync(positional[0], "utf8")
+/** I1/I2: explicit file flag, positional = literal string only, else stdin pipe. */
+function resolvePrimaryText(
+  inputFile: string | null,
+  positional: string[],
+): string | null {
+  if (inputFile) {
+    try {
+      return readFileSync(inputFile, "utf8")
+    } catch {
+      process.stderr.write(`error: cannot read --input file: ${inputFile}\n`)
+      process.exit(1)
     }
-    return joined
+  }
+  if (positional.length > 0) {
+    return positional.join(" ")
   }
   if (!process.stdin.isTTY) {
-    return readFileSync("/dev/stdin", "utf8")
+    try {
+      return readFileSync("/dev/stdin", "utf8")
+    } catch {
+      process.stderr.write("error: cannot read stdin\n")
+      process.exit(1)
+    }
   }
   return null
+}
+
+function ensureNoInputFileAndPositionalConflict(
+  inputFile: string | null,
+  positional: string[],
+): void {
+  if (inputFile && positional.length > 0) {
+    process.stderr.write(
+      "error: use either --input/-f <path> or inline positional text, not both\n",
+    )
+    process.exit(1)
+  }
+}
+
+async function formatReplQualityLine(aisp: string): Promise<string> {
+  const vr = await runValidator(aisp)
+  const self = parseEvidence(aisp)
+  const delta = vr?.delta ?? self.delta
+  const tierSym =
+    delta === null
+      ? "⊘"
+      : delta >= 0.75
+        ? "◊⁺⁺"
+        : delta >= 0.6
+          ? "◊⁺"
+          : delta >= 0.4
+            ? "◊"
+            : delta >= 0.2
+              ? "◊⁻"
+              : "⊘"
+  const tierName = TIER_NAMES[tierSym] ?? "unknown"
+  const deltaStr = delta !== null ? `δ=${delta.toFixed(2)}` : "δ=?"
+  const selfStr =
+    self.delta !== null ? `, self_δ=${self.delta.toFixed(2)}` : ""
+  return `QUALITY: ${tierSym} ${tierName} (${deltaStr}${selfStr})`
 }
 
 function resolveApiKey(provider: Provider, explicit: string | null): string {
@@ -179,12 +232,38 @@ function parseArgs(argv: string[]) {
     thinking: false,
     estimate: false,
     help: false,
+    inputFile: null as string | null,
+    feedback: null as string | null,
+    outputFile: null as string | null,
   }
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (a === "--help" || a === "-h") {
       opts.help = true
+    } else if (a === "-f" || a === "--input") {
+      const p = args[++i]
+      if (!p || p.startsWith("-")) {
+        process.stderr.write(`error: ${a} requires a file path\n`)
+        process.exit(1)
+      }
+      opts.inputFile = p
+    } else if (a === "--feedback") {
+      const p = args[++i]
+      if (p === undefined) {
+        process.stderr.write(
+          "error: --feedback requires a value (quote if it contains spaces)\n",
+        )
+        process.exit(1)
+      }
+      opts.feedback = p
+    } else if (a === "-o" || a === "--output") {
+      const p = args[++i]
+      if (!p || p.startsWith("-")) {
+        process.stderr.write(`error: ${a} requires a file path\n`)
+        process.exit(1)
+      }
+      opts.outputFile = p
     } else if (a === "--verbose") {
       opts.verbose = true
     } else if (a === "--from-aisp") {
@@ -258,11 +337,18 @@ function printHelp() {
 purify — AISP round-trip spec purification
 
 Usage:
-  purify [options] [file]
-  purify [options] "inline text"
+  purify [options] -f <path> | "inline text" | stdin
+  purify -f spec.md
+  purify "inline text"
   cat spec.md | purify
 
+  Positional arguments are always treated as literal text (not file paths).
+  Use -f / --input for file input. Do not combine -f with positional text.
+
 Options:
+  --input, -f    read primary specification from this file path
+  --feedback     author context for one shot (clarifications / extra context / suggestion); quote for spaces
+  --output, -o   write final English to this path (batch: full stdout payload; REPL: last assistant reply on /exit or EOF)
   --provider     anthropic | openai                          (default: anthropic)
   --model        main model (AISP→English)                   (default: claude-sonnet-4-6)
   --purify-model cheap model (En→AISP)                       (default: claude-haiku-4-5-20251001)
@@ -302,10 +388,11 @@ Output:
   <purified English or NEEDS_CLARIFICATION block>
 
 Examples:
-  purify spec.md > purified.md
+  purify -f spec.md > purified.md
+  purify -f spec.md -o purified.md
   purify "add a status field with draft, active, archived"
-  purify spec.md --verbose 2>aisp_debug.md
-  purify spec.md --purify-model claude-haiku-4-5-20251001
+  purify -f spec.md --verbose 2>aisp_debug.md
+  purify -f spec.md --purify-model claude-haiku-4-5-20251001
 `)
 }
 
@@ -320,6 +407,11 @@ async function runRepl(opts: {
   baseUrl: string | null
   openaiUser: string | null
   insecure: boolean
+  /** File contents when --repl and -f both set; one automatic first turn (I4). */
+  initialPrimaryFromFile: string | null
+  outputFile: string | null
+  /** --feedback applies to the first turn only (same as batch one-shot). */
+  authorContextFirstTurn: string | null
 }): Promise<void> {
   const {
     provider,
@@ -332,8 +424,12 @@ async function runRepl(opts: {
     baseUrl,
     openaiUser,
     insecure,
+    initialPrimaryFromFile,
+    outputFile,
+    authorContextFirstTurn,
   } = opts
   const messages: ConvMessage[] = []
+  let lastAssistantReply: string | null = null
 
   const rl = createInterface({ input: process.stdin })
 
@@ -341,55 +437,35 @@ async function runRepl(opts: {
     `purify repl — empty line to submit, /exit or ctrl-c to quit\n` +
       `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n\n`,
   )
-  process.stderr.write("➤ ")
 
-  // Handle Ctrl-C cleanly
   process.on("SIGINT", () => {
     process.stderr.write("\nexiting...\n")
     rl.close()
     process.exit(0)
   })
 
-  let buffer: string[] = []
-
-  for await (const line of rl) {
-    if (line !== "") {
-      buffer.push(line)
-      continue
-    }
-
-    // Empty line = submit
-    if (buffer.length === 0) {
-      process.stderr.write("➤ ")
-      continue
-    }
-
-    if (buffer.length > 1000) {
-      process.stderr.write("⊘ buffer overflow — resetting\n➤ ")
-      buffer = []
-      continue
-    }
-
-    const input = buffer.join("\n")
-    buffer = []
-
-    if (input.trim() === "/exit") break
-
+  async function runOneTurn(
+    input: string,
+    authorContext: string | null,
+  ): Promise<void> {
     try {
-      // Step 1: English → AISP (unless --from-aisp)
-      // Anthropic: use tool-use loop so the model can self-validate and revise
       let aisp = input
       if (!fromAisp) {
         process.stderr.write(`→ purifying (${purifyModel})...\n`)
+        const step1User = formatPrimaryWithAuthorContext({
+          primary: input,
+          authorContext,
+          phase: "en_to_aisp",
+        })
         aisp =
           provider === "anthropic"
-            ? await callLLMWithTools(apiKey, purifyModel, input)
+            ? await callLLMWithTools(apiKey, purifyModel, step1User)
             : await callLLM(
                 provider,
                 apiKey,
                 purifyModel,
                 TO_AISP_SYSTEM,
-                input,
+                step1User,
                 {
                   baseUrl: baseUrl ?? undefined,
                   openaiUser: openaiUser ?? undefined,
@@ -402,32 +478,15 @@ async function runRepl(opts: {
         process.stderr.write(`\n── AISP ──\n${aisp}\n──────────\n\n`)
       }
 
-      // Validate and score the AISP
-      const vr = await runValidator(aisp)
-      const self = parseEvidence(aisp)
-      const delta = vr?.delta ?? self.delta
-      const tierSym =
-        delta === null
-          ? "⊘"
-          : delta >= 0.75
-            ? "◊⁺⁺"
-            : delta >= 0.6
-              ? "◊⁺"
-              : delta >= 0.4
-                ? "◊"
-                : delta >= 0.2
-                  ? "◊⁻"
-                  : "⊘"
-      const tierName = TIER_NAMES[tierSym] ?? "unknown"
-      const deltaStr = delta !== null ? `δ=${delta.toFixed(2)}` : "δ=?"
-      const selfStr =
-        self.delta !== null ? `, self_δ=${self.delta.toFixed(2)}` : ""
-      process.stderr.write(
-        `QUALITY: ${tierSym} ${tierName} (${deltaStr}${selfStr})\n`,
-      )
+      const qualityLine = await formatReplQualityLine(aisp)
+      process.stderr.write(`${qualityLine}\n`)
 
-      // Step 3: AISP → English via main model with full conversation history (streamed)
-      messages.push({ role: "user", content: aisp })
+      const replUserContent = formatPrimaryWithAuthorContext({
+        primary: aisp,
+        authorContext,
+        phase: "aisp_to_en",
+      })
+      messages.push({ role: "user", content: replUserContent })
       process.stderr.write(`→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
       const response = await callLLMRepl(
@@ -444,15 +503,52 @@ async function runRepl(opts: {
         },
       )
       messages.push({ role: "assistant", content: response })
+      lastAssistantReply = response
 
       process.stdout.write("\n\n")
     } catch (err) {
       logError(err)
-      // Roll back the user message if we never got a response
       if (messages.at(-1)?.role === "user") messages.pop()
     }
+  }
+
+  if (initialPrimaryFromFile !== null) {
+    await runOneTurn(initialPrimaryFromFile, authorContextFirstTurn)
+  }
+
+  process.stderr.write("➤ ")
+
+  let buffer: string[] = []
+
+  for await (const line of rl) {
+    if (line !== "") {
+      buffer.push(line)
+      continue
+    }
+
+    if (buffer.length === 0) {
+      process.stderr.write("➤ ")
+      continue
+    }
+
+    if (buffer.length > 1000) {
+      process.stderr.write("⊘ buffer overflow — resetting\n➤ ")
+      buffer = []
+      continue
+    }
+
+    const input = buffer.join("\n")
+    buffer = []
+
+    if (input.trim() === "/exit") break
+
+    await runOneTurn(input, null)
 
     process.stderr.write("➤ ")
+  }
+
+  if (outputFile && lastAssistantReply !== null) {
+    writeFileSync(outputFile, lastAssistantReply, "utf8")
   }
 
   process.stderr.write("\nexiting...\n")
@@ -468,6 +564,8 @@ async function runSuggest(opts: {
   fromAisp: boolean
   inputFile: string | null
   initialText: string
+  /** I7: only the initial purify uses --feedback. */
+  feedback: string | null
   baseUrl: string | null
   openaiUser: string | null
   insecure: boolean
@@ -481,6 +579,7 @@ async function runSuggest(opts: {
     mode,
     fromAisp,
     inputFile,
+    feedback,
     baseUrl,
     openaiUser,
     insecure,
@@ -501,7 +600,7 @@ async function runSuggest(opts: {
     process.exit(0)
   })
 
-  async function doPurify(): Promise<string> {
+  async function doPurify(authorContext?: string | null): Promise<string> {
     const result = await purify({
       text: currentText,
       provider,
@@ -511,6 +610,7 @@ async function runSuggest(opts: {
       verbose,
       mode,
       fromAisp,
+      authorContext: authorContext ?? undefined,
       baseUrl: baseUrl ?? undefined,
       openaiUser: openaiUser ?? undefined,
       insecure,
@@ -521,9 +621,9 @@ async function runSuggest(opts: {
     return result
   }
 
-  // Initial purify
+  // Initial purify (only first call carries --feedback)
   process.stderr.write(`→ purifying initial input...\n`)
-  let purifiedResult = await doPurify()
+  let purifiedResult = await doPurify(feedback)
 
   process.stderr.write("➤ ")
 
@@ -548,7 +648,7 @@ async function runSuggest(opts: {
     if (input === "/save") {
       if (!inputFile) {
         process.stderr.write(
-          "⊘ no input file to save to — pass a file path as the argument\n",
+          "⊘ no input file to save to — use --input/-f <path> for /save\n",
         )
       } else {
         writeFileSync(inputFile, currentText, "utf8")
@@ -611,6 +711,18 @@ async function main() {
   }
 
   if (opts.repl) {
+    ensureNoInputFileAndPositionalConflict(opts.inputFile, positional)
+    let initialPrimaryFromFile: string | null = null
+    if (opts.inputFile) {
+      try {
+        initialPrimaryFromFile = readFileSync(opts.inputFile, "utf8")
+      } catch {
+        process.stderr.write(
+          `error: cannot read --input file: ${opts.inputFile}\n`,
+        )
+        process.exit(1)
+      }
+    }
     const provider = opts.provider
     const mainModel =
       opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
@@ -630,15 +742,19 @@ async function main() {
       baseUrl: opts.baseUrl,
       openaiUser: opts.openaiUser,
       insecure: opts.insecure,
+      initialPrimaryFromFile,
+      outputFile: opts.outputFile,
+      authorContextFirstTurn: opts.feedback,
     })
     process.exit(0)
   }
 
   if (opts.suggest) {
-    const text = resolveInput(positional)
+    ensureNoInputFileAndPositionalConflict(opts.inputFile, positional)
+    const text = resolvePrimaryText(opts.inputFile, positional)
     if (!text?.trim()) {
       process.stderr.write(
-        "error: --suggest requires an input file or inline text\n",
+        "error: --suggest requires -f/--input, inline text, or stdin\n",
       )
       process.exit(1)
     }
@@ -650,10 +766,6 @@ async function main() {
       process.env.PURIFY_MODEL_CHEAP ??
       DEFAULT_CHEAP_MODELS[provider]
     const apiKey = resolveApiKey(provider, opts.apiKey)
-    const inputFile =
-      positional.length === 1 && existsSync(positional[0])
-        ? positional[0]
-        : null
     await runSuggest({
       provider,
       mainModel,
@@ -662,8 +774,9 @@ async function main() {
       verbose: opts.verbose,
       mode: opts.mode,
       fromAisp: opts.fromAisp,
-      inputFile,
+      inputFile: opts.inputFile,
       initialText: text!,
+      feedback: opts.feedback,
       baseUrl: opts.baseUrl,
       openaiUser: opts.openaiUser,
       insecure: opts.insecure,
@@ -671,7 +784,8 @@ async function main() {
     process.exit(0)
   }
 
-  const text = resolveInput(positional)
+  ensureNoInputFileAndPositionalConflict(opts.inputFile, positional)
+  const text = resolvePrimaryText(opts.inputFile, positional)
   if (!text?.trim()) {
     printHelp()
     process.exit(0)
@@ -693,11 +807,16 @@ async function main() {
       )
       process.exit(1)
     }
+    const estimateUser = formatPrimaryWithAuthorContext({
+      primary: text!,
+      authorContext: opts.feedback,
+      phase: "en_to_aisp",
+    })
     const client = new Anthropic({ apiKey })
     const count = await client.messages.countTokens({
       model: purifyModel,
-      system: (await import("./providers.ts")).TO_AISP_SYSTEM_WITH_TOOLS,
-      messages: [{ role: "user", content: text! }],
+      system: TO_AISP_SYSTEM_WITH_TOOLS,
+      messages: [{ role: "user", content: estimateUser }],
     })
     process.stdout.write(
       `Step 1 input tokens (${purifyModel}): ${count.input_tokens}\n` +
@@ -712,7 +831,7 @@ async function main() {
   )
 
   try {
-    await purify({
+    const out = await purify({
       text: text!,
       provider,
       mainModel,
@@ -723,11 +842,15 @@ async function main() {
       mode: opts.mode,
       thinking: opts.thinking,
       stream: true,
+      authorContext: opts.feedback,
       baseUrl: opts.baseUrl ?? undefined,
       openaiUser: opts.openaiUser ?? undefined,
       insecure: opts.insecure,
     })
     process.stdout.write("\n")
+    if (opts.outputFile) {
+      writeFileSync(opts.outputFile, out, "utf8")
+    }
   } catch (err) {
     logError(err)
     process.exit(1)

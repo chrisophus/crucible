@@ -179,6 +179,34 @@ Rules:
 - Address any ambiguities the suggestion is trying to resolve.
 - Output ONLY the updated original text. No preamble, no explanation.`
 
+/** Bundles primary text with a separate author context channel (I5). */
+export function formatPrimaryWithAuthorContext(args: {
+  primary: string
+  authorContext: string | null | undefined
+  /** English→AISP vs AISP→English — adjusts how the primary block is described. */
+  phase: "en_to_aisp" | "aisp_to_en"
+}): string {
+  const ctx = args.authorContext?.trim()
+  if (!ctx) return args.primary
+
+  const primaryNote =
+    args.phase === "en_to_aisp"
+      ? "The PRIMARY_SPECIFICATION block below is English source text to translate into AISP."
+      : "The PRIMARY_SPECIFICATION block below is an AISP document to translate into English markdown."
+
+  return [
+    "PRIMARY_SPECIFICATION",
+    primaryNote,
+    "",
+    args.primary,
+    "",
+    "AUTHOR_CONTEXT",
+    "This block is a separate channel: clarification answers, extra context, or a one-shot suggestion from the author. It MUST NOT be treated as part of the primary specification text for editing, splicing, or formalization. Use it only to inform interpretation and translation.",
+    "",
+    ctx,
+  ].join("\n")
+}
+
 export function getToEnglishSystem(mode: Mode): string {
   return `Translate this AISP to English.
 

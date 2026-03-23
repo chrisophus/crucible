@@ -359,11 +359,15 @@ Combined tier (MCP tools use both δ and φ):
 The CLI provides direct access to the purification pipeline without session management.
 
 ```
-purify [options] [file]
+purify [options] -f <path> | "inline text" | stdin
+purify -f spec.md
 purify [options] "inline text"
 cat spec.md | purify [options]
 purify --repl
+purify --repl -f spec.md
 ```
+
+Positional arguments are literal text only (not file paths). Use `--input` / `-f` for files.
 
 ### CLI Pipeline
 
@@ -389,8 +393,13 @@ purify ≜ λp:Prompt.
 | `--mode-file <path>` | Path to a skill markdown file |
 | `--formal` / `--narrative` / `--hybrid` / `--sketch` / `--summary` | Shorthand mode flags |
 | `--api-key <key>` | API key |
+| `--input <path>`, `-f <path>` | Read primary specification from file |
+| `--feedback <string>` | One-shot author context (clarifications / extra context); quote for spaces |
+| `--output <path>`, `-o <path>` | Write final English (batch: full stdout payload; REPL: last assistant reply on exit) |
 | `--from-aisp` | Skip step 1 — input is already AISP |
 | `--repl` | Interactive session with prompt caching |
+| `--suggest` | Purified vs original suggestion loop (`-f` enables `/save` to that path) |
+| `--estimate` | Token count for step 1 (Anthropic only) |
 | `--verbose` | Write AISP intermediate and scores to stderr |
 | `--help` | Print help |
 
