@@ -189,6 +189,145 @@ ${NEEDS_CLARIFICATION_BLOCK}
 Output only the markdown or the NEEDS_CLARIFICATION block. No preamble.`
 }
 
+// ── New prompts for purify MCP tools ──────────────────────────────────────────
+
+export const REFLECT_SYSTEM = `\
+Read the following text and state in your own words what you understand
+the author to mean. List any assumptions you are making explicitly.
+List anything you are uncertain about. Do not attempt to formalize,
+translate, or improve the text. Only interpret it.
+
+Output JSON only, no markdown fences:
+{
+  "interpretation": "your understanding of what the author means",
+  "assumptions": ["explicit assumption 1", "explicit assumption 2"],
+  "uncertainties": ["uncertainty 1", "uncertainty 2"]
+}`
+
+export const CONTRADICTION_DETECTION_SYSTEM = `\
+Analyze the AISP document for logical contradictions. Check for:
+1. unsatisfiable_conjunction: A rule and its direct negation both asserted (A ∧ ¬A)
+2. unreachable_state: A state declared but no transition leads to it
+3. conflicting_write_authority: Two sources unconditionally own the same field
+4. violated_uniqueness: A uniqueness constraint conflicts with a multiplicity rule
+
+Output JSON only, no markdown fences:
+{
+  "contradictions": [
+    {
+      "kind": "unsatisfiable_conjunction|unreachable_state|conflicting_write_authority|violated_uniqueness",
+      "statement_a": "plain English description of first statement",
+      "statement_b": "plain English description of conflicting statement",
+      "proof": "plain English explanation of why both cannot hold simultaneously",
+      "question": "specific question for the author to resolve this contradiction"
+    }
+  ]
+}
+
+If no contradictions are found, output: {"contradictions": []}`
+
+export const CLARIFICATION_EXTRACTION_SYSTEM = `\
+Analyze the AISP document and identify areas that need clarification.
+For each, determine if it is REQUIRED (blocks meaningful use) or OPTIONAL (improves quality).
+
+Clarification sources:
+- low_delta: a field or rule resisted formalization and remained vague
+- low_phi: an expected block is missing or sparse
+- contradiction: a logically unsatisfiable condition was found
+- unreachable_state: a state is declared but cannot be reached
+- conflicting_authority: two sources conditionally own the same field
+
+Output JSON only, no markdown fences:
+{
+  "clarifications": [
+    {
+      "priority": "REQUIRED|OPTIONAL",
+      "question": "specific, answerable question (binary or multiple-choice where possible)",
+      "source": "low_delta|low_phi|contradiction|unreachable_state|conflicting_authority",
+      "field": "optional: specific field or rule name"
+    }
+  ]
+}
+
+If no clarifications are needed, output: {"clarifications": []}`
+
+export const TRANSLATE_FIDELITY_SYSTEM = `\
+Translate this AISP to English.
+
+The English output must read as though the original author wrote it more carefully —
+not as documentation generated from a schema, not as a summary, not as an expansion.
+Preserve the author's style and flow. Where the original was ambiguous, collapse the
+ambiguity into a specific choice. Do not add rationale not in the source.
+No hedge words: never use "typically", "usually", "often", "generally".
+No preamble. Start with the first section heading.
+
+Output only the translated English text.`
+
+export const UPDATE_SYSTEM = `\
+Apply the described change to the existing purified text. Edit in place.
+Do not regenerate from scratch. Preserve the style, spirit, and flow of
+the existing text in all sections not directly affected by the change.
+Return a diff showing only what changed and what was preserved in each
+affected section.
+
+You will receive:
+  EXISTING_PURIFIED: the current purified English text
+  EXISTING_AISP: the current AISP document
+  CHANGE: description of the requested change
+
+Output JSON only, no markdown fences:
+{
+  "purified": "the complete updated purified text",
+  "aisp": "the complete updated AISP document",
+  "diff": [
+    {
+      "section": "section name or heading",
+      "change": "what changed in this section",
+      "preserved": "what was preserved unchanged in this section"
+    }
+  ]
+}`
+
+export const INIT_SYSTEM = `\
+Extract domain context from the provided project files to create a purify.context.md file.
+
+Identify:
+- domain_entities: key types, models, and concepts with their meanings
+- vocabulary: terms with precise definitions specific to this project
+- constraints: known invariants and business rules
+- conventions: style and structural preferences observed in the files
+- out_of_scope: things explicitly excluded or out of scope
+
+Output JSON only, no markdown fences:
+{
+  "context_file": "full content for purify.context.md in markdown format",
+  "summary": "brief description of what was extracted and from which files"
+}
+
+The context_file should use this structure:
+# Domain Context
+
+## Entities
+...
+
+## Vocabulary
+...
+
+## Constraints
+...
+
+## Conventions
+...
+
+## Out of Scope
+...`
+
+export const CLARIFY_SYSTEM = `\
+You are refining an AISP document based on answers to clarifying questions.
+Incorporate the answers to improve the AISP's precision and completeness.
+Update only the parts of the AISP affected by the answers.
+Output the complete updated AISP document only, no preamble.`
+
 export function getReplSystem(mode: Mode): string {
   return (
     getToEnglishSystem(mode) +
