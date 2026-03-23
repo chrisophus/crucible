@@ -38,8 +38,8 @@ import OpenAI from "openai"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Provider = "anthropic" | "openai"
-type Mode = "formal" | "narrative" | "hybrid" | "sketch" | "summary"
+export type Provider = "anthropic" | "openai"
+export type Mode = "formal" | "narrative" | "hybrid" | "sketch" | "summary"
 type ConvMessage = { role: "user" | "assistant"; content: string }
 
 interface Evidence {
@@ -293,7 +293,7 @@ const TIER_NAMES: Record<string, string> = {
   "⊘":   "invalid",
 }
 
-function parseEvidence(aisp: string): Evidence {
+export function parseEvidence(aisp: string): Evidence {
   const deltaMatch = aisp.match(/δ[≜=]\s*([\d.]+)/)
   const delta = deltaMatch ? parseFloat(deltaMatch[1]) : null
 
@@ -317,7 +317,7 @@ function parseEvidence(aisp: string): Evidence {
 
 let validatorInitialized = false
 
-async function runValidator(aisp: string): Promise<ValidatorResult | null> {
+export async function runValidator(aisp: string): Promise<ValidatorResult | null> {
   try {
     if (!validatorInitialized) {
       await AISP.init()
@@ -339,11 +339,11 @@ async function runValidator(aisp: string): Promise<ValidatorResult | null> {
 
 // ── Providers ─────────────────────────────────────────────────────────────────
 
-const DEFAULT_MODELS: Record<Provider, string> = {
+export const DEFAULT_MODELS: Record<Provider, string> = {
   anthropic: "claude-sonnet-4-6",
   openai:    "gpt-4o",
 }
-const DEFAULT_CHEAP_MODELS: Record<Provider, string> = {
+export const DEFAULT_CHEAP_MODELS: Record<Provider, string> = {
   anthropic: "claude-haiku-4-5-20251001",
   openai:    "gpt-4o-mini",
 }
@@ -545,7 +545,7 @@ function eprint(msg: string, verbose: boolean) {
   if (verbose) process.stderr.write(msg + "\n")
 }
 
-async function purify(opts: {
+export async function purify(opts: {
   text: string
   provider: Provider
   mainModel: string
@@ -659,7 +659,7 @@ function resolveApiKey(provider: Provider, explicit: string | null): string {
   return key
 }
 
-const VALID_MODES: Mode[] = ["formal", "narrative", "hybrid", "sketch", "summary"]
+export const VALID_MODES: Mode[] = ["formal", "narrative", "hybrid", "sketch", "summary"]
 
 /**
  * Parse a skill markdown file and extract the mode from it.
@@ -1111,4 +1111,6 @@ async function main() {
   }
 }
 
-main()
+// Only run CLI when executed directly
+const isMain = process.argv[1] && new URL(import.meta.url).pathname === new URL(process.argv[1], "file:").pathname
+if (isMain) main()
