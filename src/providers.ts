@@ -20,25 +20,14 @@ function makeOpenAIClient(
   baseUrl?: string,
   insecure?: boolean,
 ): OpenAI {
-  let fetchImpl: typeof fetch | undefined
   if (insecure) {
-    // Disable TLS verification for self-signed / corporate proxy certs
-    const https = require("node:https") as typeof import("https")
-    const agent = new https.Agent({ rejectUnauthorized: false })
-    fetchImpl = (url, init) => {
-      const { default: nodeFetch } = require("node-fetch") as {
-        default: typeof fetch
-      }
-      return nodeFetch(
-        url as string,
-        { ...init, agent } as Parameters<typeof nodeFetch>[1],
-      )
-    }
+    // Disable TLS cert verification process-wide (safe for a CLI tool).
+    // Must be set before the first fetch so the undici/native-fetch dispatcher picks it up.
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
   }
   return new OpenAI({
     apiKey,
     ...(baseUrl ? { baseURL: baseUrl } : {}),
-    ...(fetchImpl ? { fetch: fetchImpl } : {}),
   })
 }
 
