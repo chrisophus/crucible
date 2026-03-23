@@ -120,6 +120,8 @@ function parseArgs(argv: string[]) {
     model:        null as string | null,
     purifyModel:  null as string | null,
     apiKey:       null as string | null,
+    baseUrl:      (process.env.OPENAI_BASE_URL ?? null) as string | null,
+    openaiUser:   (process.env.OPENAI_USER ?? null) as string | null,
     mode:         (process.env.PURIFY_MODE ?? "narrative") as Mode,
     modeFile:     (process.env.PURIFY_MODE_FILE ?? null) as string | null,
     verbose:      false,
@@ -151,6 +153,8 @@ function parseArgs(argv: string[]) {
     else if (a === "--sketch")                  { opts.mode = "sketch" }
     else if (a === "--summary")                 { opts.mode = "summary" }
     else if (a === "--api-key")                 { opts.apiKey = args[++i] }
+    else if (a === "--base-url")                { opts.baseUrl = args[++i] }
+    else if (a === "--user")                    { opts.openaiUser = args[++i] }
     else if (!a.startsWith("--"))               { positional.push(a) }
     else {
       process.stderr.write(`error: unknown option ${a}\n`)
@@ -187,6 +191,8 @@ Options:
   --mode         formal|narrative|hybrid|sketch|summary      (default: narrative)
   --mode-file    path to a skill markdown file that specifies the mode
   --api-key      API key                                     (default: env var)
+  --base-url     OpenAI-compatible base URL                  (default: OPENAI_BASE_URL)
+  --user         OpenAI user identifier for tracking         (default: OPENAI_USER)
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
   --suggest      show purified version then suggest changes applied to the original
@@ -207,7 +213,7 @@ Mode files:
   section. Example: purify --mode-file .claude/skills/sketch-mode.md
 
 Environment:
-  ANTHROPIC_API_KEY  OPENAI_API_KEY
+  ANTHROPIC_API_KEY  OPENAI_API_KEY  OPENAI_BASE_URL  OPENAI_USER
   PURIFY_PROVIDER    PURIFY_MODEL    PURIFY_MODEL_CHEAP  PURIFY_MODE
   PURIFY_MODE_FILE   path to a skill markdown file (overridden by --mode-file)
 
@@ -232,8 +238,10 @@ async function runRepl(opts: {
   verbose: boolean
   mode: Mode
   fromAisp: boolean
+  baseUrl: string | null
+  openaiUser: string | null
 }): Promise<void> {
-  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp } = opts
+  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, baseUrl, openaiUser } = opts
   const messages: ConvMessage[] = []
 
   const rl = createInterface({ input: process.stdin })
@@ -284,7 +292,7 @@ async function runRepl(opts: {
         process.stderr.write(`→ purifying (${purifyModel})...\n`)
         aisp = provider === "anthropic"
           ? await callLLMWithTools(apiKey, purifyModel, input)
-          : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, input)
+          : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, input, { baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined })
       }
 
       if (verbose) {
@@ -307,7 +315,7 @@ async function runRepl(opts: {
       messages.push({ role: "user", content: aisp })
       process.stderr.write(`→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
-      const response = await callLLMRepl(provider, apiKey, mainModel, getReplSystem(mode), messages, process.stdout)
+      const response = await callLLMRepl(provider, apiKey, mainModel, getReplSystem(mode), messages, process.stdout, { baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined })
       messages.push({ role: "assistant", content: response })
 
       process.stdout.write("\n\n")
@@ -333,8 +341,10 @@ async function runSuggest(opts: {
   fromAisp: boolean
   inputFile: string | null
   initialText: string
+  baseUrl: string | null
+  openaiUser: string | null
 }): Promise<void> {
-  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, inputFile } = opts
+  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, inputFile, baseUrl, openaiUser } = opts
   let currentText = opts.initialText
 
   const rl = createInterface({ input: process.stdin })
@@ -355,6 +365,7 @@ async function runSuggest(opts: {
     const result = await purify({
       text: currentText,
       provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp,
+      baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined,
     })
     process.stdout.write("\n── PURIFIED VERSION ──\n" + result + "\n── END PURIFIED ──\n\n")
     return result
@@ -408,7 +419,7 @@ async function runSuggest(opts: {
         input,
       ].join("\n")
 
-      currentText = await callLLM(provider, apiKey, mainModel, APPLY_SUGGESTION_SYSTEM, userMsg)
+      currentText = await callLLM(provider, apiKey, mainModel, APPLY_SUGGESTION_SYSTEM, userMsg, { baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined })
 
       process.stdout.write("\n── UPDATED ORIGINAL ──\n" + currentText + "\n── END ORIGINAL ──\n\n")
 
@@ -439,7 +450,7 @@ async function main() {
     const mainModel   = opts.model       ?? process.env.PURIFY_MODEL       ?? DEFAULT_MODELS[provider]
     const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
     const apiKey      = resolveApiKey(provider, opts.apiKey)
-    await runRepl({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp })
+    await runRepl({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp, baseUrl: opts.baseUrl, openaiUser: opts.openaiUser })
     process.exit(0)
   }
 
@@ -454,7 +465,7 @@ async function main() {
     const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
     const apiKey      = resolveApiKey(provider, opts.apiKey)
     const inputFile   = positional.length === 1 && existsSync(positional[0]) ? positional[0] : null
-    await runSuggest({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp, inputFile, initialText: text! })
+    await runSuggest({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp, inputFile, initialText: text!, baseUrl: opts.baseUrl, openaiUser: opts.openaiUser })
     process.exit(0)
   }
 
@@ -501,6 +512,8 @@ async function main() {
       mode: opts.mode,
       thinking: opts.thinking,
       stream: true,
+      baseUrl: opts.baseUrl ?? undefined,
+      openaiUser: opts.openaiUser ?? undefined,
     })
     process.stdout.write("\n")
   } catch (err) {

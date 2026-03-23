@@ -21,9 +21,9 @@ export async function callLLM(
   model: string,
   system: string,
   user: string,
-  opts: { streamTo?: NodeJS.WritableStream; thinking?: boolean } = {},
+  opts: { streamTo?: NodeJS.WritableStream; thinking?: boolean; baseUrl?: string; openaiUser?: string } = {},
 ): Promise<string> {
-  const { streamTo, thinking } = opts
+  const { streamTo, thinking, baseUrl, openaiUser } = opts
   if (provider === "anthropic") {
     const client = new Anthropic({ apiKey })
     const params = {
@@ -48,7 +48,7 @@ export async function callLLM(
     const textBlock = msg.content.find((b: { type: string }) => b.type === "text") as { type: "text"; text: string } | undefined
     return textBlock?.text ?? ""
   } else {
-    const client = new OpenAI({ apiKey })
+    const client = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) })
     if (streamTo) {
       const stream = await client.chat.completions.create({
         model,
@@ -58,6 +58,7 @@ export async function callLLM(
           { role: "user",   content: user },
         ],
         stream: true,
+        ...(openaiUser ? { user: openaiUser } : {}),
       })
       let text = ""
       for await (const chunk of stream) {
@@ -73,6 +74,7 @@ export async function callLLM(
         { role: "system", content: system },
         { role: "user",   content: user },
       ],
+      ...(openaiUser ? { user: openaiUser } : {}),
     })
     return resp.choices[0].message.content ?? ""
   }
@@ -86,7 +88,9 @@ export async function callLLMRepl(
   system: string,
   messages: ConvMessage[],
   streamTo?: NodeJS.WritableStream,
+  opts: { baseUrl?: string; openaiUser?: string } = {},
 ): Promise<string> {
+  const { baseUrl, openaiUser } = opts
   if (provider === "anthropic") {
     const client = new Anthropic({ apiKey })
     // System prompt takes 1 cache slot; cache up to 3 most recent prior messages.
@@ -121,13 +125,14 @@ export async function callLLMRepl(
     const msg = await client.messages.create(params) as Message
     return (msg.content[0] as { text: string }).text
   } else {
-    const client = new OpenAI({ apiKey })
+    const client = new OpenAI({ apiKey, ...(baseUrl ? { baseURL: baseUrl } : {}) })
     if (streamTo) {
       const stream = await client.chat.completions.create({
         model,
         max_tokens: 8096,
         messages: [{ role: "system", content: system }, ...messages],
         stream: true,
+        ...(openaiUser ? { user: openaiUser } : {}),
       })
       let text = ""
       for await (const chunk of stream) {
@@ -140,6 +145,7 @@ export async function callLLMRepl(
       model,
       max_tokens: 8096,
       messages: [{ role: "system", content: system }, ...messages],
+      ...(openaiUser ? { user: openaiUser } : {}),
     })
     return resp.choices[0].message.content ?? ""
   }

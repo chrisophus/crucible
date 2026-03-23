@@ -18,8 +18,10 @@ export async function purify(opts: {
   fromAisp?: boolean
   thinking?: boolean
   stream?: boolean
+  baseUrl?: string
+  openaiUser?: string
 }): Promise<string> {
-  const { text, provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, thinking, stream } = opts
+  const { text, provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, thinking, stream, baseUrl, openaiUser } = opts
 
   let aisp: string
   if (fromAisp) {
@@ -32,7 +34,7 @@ export async function purify(opts: {
     eprint(`→ purifying (${purifyModel})...`, verbose)
     aisp = provider === "anthropic"
       ? await callLLMWithTools(apiKey, purifyModel, text)
-      : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, text)
+      : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, text, { baseUrl, openaiUser })
   }
 
   if (verbose) {
@@ -82,11 +84,11 @@ export async function purify(opts: {
   eprint(`→ translating back (${mainModel})...`, verbose)
   if (stream) {
     process.stdout.write(qualityHeader + "\n---\n")
-    const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp, { streamTo: process.stdout, thinking })
+    const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp, { streamTo: process.stdout, thinking, baseUrl, openaiUser })
     return qualityHeader + "\n---\n" + english
   }
 
-  const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp, { thinking })
+  const english = await callLLM(provider, apiKey, mainModel, getToEnglishSystem(mode), aisp, { thinking, baseUrl, openaiUser })
 
   return [qualityHeader, "---", english].join("\n")
 }

@@ -176,6 +176,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         verbose: false,
         mode: mode as Mode,
         fromAisp: from_aisp,
+        baseUrl: process.env.OPENAI_BASE_URL,
+        openaiUser: process.env.OPENAI_USER,
       })
 
       return {
