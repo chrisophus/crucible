@@ -12,6 +12,7 @@
  *   --model      main model (AISP→English)                 (default: provider default)
  *   --purify-model  cheap model (En→AISP)                  (default: haiku / gpt-4o-mini)
  *   --mode       formal | narrative | hybrid | sketch | summary  (default: narrative)
+ *   --mode-file  path to a skill markdown file that specifies the mode
  *   --api-key    API key                                    (default: env var)
  *   --verbose    write AISP and scores to stderr
  *   --help
@@ -19,6 +20,7 @@
  * Environment:
  *   ANTHROPIC_API_KEY  OPENAI_API_KEY
  *   PURIFY_PROVIDER    PURIFY_MODEL    PURIFY_MODEL_CHEAP
+ *   PURIFY_MODE_FILE   path to a skill markdown file (overridden by --mode-file)
  *
  * Output:
  *   QUALITY: <tier_symbol> <tier_name> (δ=<score>, validator_δ=<score>)
@@ -525,6 +527,63 @@ function resolveApiKey(provider: Provider, explicit: string | null): string {
   return key
 }
 
+const VALID_MODES: Mode[] = ["formal", "narrative", "hybrid", "sketch", "summary"]
+
+/**
+ * Parse a skill markdown file and extract the mode from it.
+ *
+ * Reads the mode from YAML frontmatter (`mode: <value>`) or from a
+ * `## Mode` section (first non-empty line after the heading).
+ *
+ * Example skill file:
+ *
+ *   ---
+ *   mode: narrative
+ *   ---
+ *
+ *   # My Mode
+ *   ...
+ *
+ * Or without frontmatter:
+ *
+ *   ## Mode
+ *   sketch
+ */
+function parseModeFile(filePath: string): Mode {
+  if (!existsSync(filePath)) {
+    process.stderr.write(`error: mode file not found: ${filePath}\n`)
+    process.exit(1)
+  }
+
+  const content = readFileSync(filePath, "utf8")
+
+  // Try YAML frontmatter first: look for `mode: <value>` between --- delimiters
+  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/m)
+  if (frontmatterMatch) {
+    const modeMatch = frontmatterMatch[1].match(/^mode:\s*(\S+)/m)
+    if (modeMatch) {
+      const mode = modeMatch[1].toLowerCase() as Mode
+      if (!VALID_MODES.includes(mode)) {
+        process.stderr.write(`error: invalid mode "${mode}" in ${filePath}. Valid modes: ${VALID_MODES.join(", ")}\n`)
+        process.exit(1)
+      }
+      return mode
+    }
+  }
+
+  // Fall back to ## Mode section
+  const modeSectionMatch = content.match(/^##\s+Mode\s*\r?\n([\s\S]*?)(?:^##|\Z)/m)
+  if (modeSectionMatch) {
+    const firstLine = modeSectionMatch[1].split(/\r?\n/).find(l => l.trim())?.trim().toLowerCase() as Mode | undefined
+    if (firstLine && VALID_MODES.includes(firstLine)) {
+      return firstLine
+    }
+  }
+
+  process.stderr.write(`error: no valid mode found in ${filePath}. Add "mode: <value>" to frontmatter or a "## Mode" section.\n`)
+  process.exit(1)
+}
+
 function parseArgs(argv: string[]) {
   const args = argv.slice(2)
   const positional: string[] = []
@@ -534,6 +593,7 @@ function parseArgs(argv: string[]) {
     purifyModel:  null as string | null,
     apiKey:       null as string | null,
     mode:         (process.env.PURIFY_MODE ?? "narrative") as Mode,
+    modeFile:     (process.env.PURIFY_MODE_FILE ?? null) as string | null,
     verbose:      false,
     fromAisp:     false,
     repl:         false,
@@ -552,6 +612,7 @@ function parseArgs(argv: string[]) {
     else if (a === "--model")                   { opts.model = args[++i] }
     else if (a === "--purify-model")            { opts.purifyModel = args[++i] }
     else if (a === "--mode")                    { opts.mode = args[++i] as Mode }
+    else if (a === "--mode-file")               { opts.modeFile = args[++i] }
     else if (a === "--formal")                  { opts.mode = "formal" }
     else if (a === "--narrative")               { opts.mode = "narrative" }
     else if (a === "--hybrid")                  { opts.mode = "hybrid" }
@@ -563,6 +624,16 @@ function parseArgs(argv: string[]) {
       process.stderr.write(`error: unknown option ${a}\n`)
       process.exit(1)
     }
+  }
+
+  // Resolve mode from file if provided (mode file takes precedence over env var,
+  // but explicit --mode / --formal etc. flags take precedence over mode file)
+  const modeSetByFlag = argv.slice(2).some(a =>
+    a === "--mode" || a === "--formal" || a === "--narrative" ||
+    a === "--hybrid" || a === "--sketch" || a === "--summary"
+  )
+  if (opts.modeFile && !modeSetByFlag) {
+    opts.mode = parseModeFile(opts.modeFile)
   }
 
   return { opts, positional }
@@ -582,6 +653,7 @@ Options:
   --model        main model (AISP→English)                   (default: claude-sonnet-4-6)
   --purify-model cheap model (En→AISP)                       (default: claude-haiku-4-5-20251001)
   --mode         formal|narrative|hybrid|sketch|summary      (default: narrative)
+  --mode-file    path to a skill markdown file that specifies the mode
   --api-key      API key                                     (default: env var)
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
@@ -596,9 +668,14 @@ Modes:
   sketch     High-level overview; bullet list; minimal symbols
   summary    Plain English; no notation; executive summary
 
+Mode files:
+  A skill markdown file with a "mode:" key in YAML frontmatter or a "## Mode"
+  section. Example: purify --mode-file .claude/skills/sketch-mode.md
+
 Environment:
   ANTHROPIC_API_KEY  OPENAI_API_KEY
   PURIFY_PROVIDER    PURIFY_MODEL    PURIFY_MODEL_CHEAP  PURIFY_MODE
+  PURIFY_MODE_FILE   path to a skill markdown file (overridden by --mode-file)
 
 Output:
   QUALITY: <tier> <name> (δ=<validator_score>, self_δ=<self_score>)
