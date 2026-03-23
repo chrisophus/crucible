@@ -89,14 +89,16 @@ export async function callLLMRepl(
 ): Promise<string> {
   if (provider === "anthropic") {
     const client = new Anthropic({ apiKey })
-    // Cache system prompt; cache all messages except the current (last) user message
+    // System prompt takes 1 cache slot; cache up to 3 most recent prior messages.
+    // Anthropic limit is 4 cache breakpoints per request.
     const anthropicMsgs = messages.map((m, i) => {
       const isLast = i === messages.length - 1
+      const inCacheWindow = !isLast && i >= messages.length - 4
       return {
         role: m.role,
-        content: isLast
-          ? m.content
-          : [{ type: "text" as const, text: m.content, cache_control: { type: "ephemeral" as const } }],
+        content: inCacheWindow
+          ? [{ type: "text" as const, text: m.content, cache_control: { type: "ephemeral" as const } }]
+          : m.content,
       }
     })
     const params = {

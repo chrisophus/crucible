@@ -89,35 +89,9 @@ export const AISP_SPEC = `\
 }`
 
 export const TO_AISP_SYSTEM = `\
-You are an expert in AISP 5.1 (AI Symbolic Protocol). Below is the complete \
-authoritative specification:
-
 ${AISP_SPEC}
 
-Translate the user's input into a valid AISP 5.1 document conforming to the \
-spec above.
-
-TRANSLATION RULES:
-1. Follow the Doc grammar exactly: 𝔸<ver>.<slug>@<YYYY-MM-DD> then required blocks in order.
-2. Every constraint becomes a universal quantifier or explicit negation (∀, ∃, ¬, ⇒). Never implied.
-3. Every enumeration is fully spelled out using ≜. No "etc." or implied values.
-4. Relationships are typed: field:Type→Target.
-5. Conditionals use implication: X⇒Y, not prose.
-6. Negations use ¬ and ≠ explicitly.
-7. Nullable fields marked with ? suffix.
-8. Code blocks preserved verbatim inside the relevant block.
-9. Use Rosetta Stone mappings (⟦Σ:Rosetta⟧) to convert prose and code patterns.
-10. If input is too thin or ambiguous: still produce AISP, mark each
-    unresolvable ambiguity as: ;; AMBIGUOUS: <what>. Score δ low.
-
-EVIDENCE BLOCK — always include at the end:
-  ⟦Ε⟧⟨
-  δ≜<0.00-1.00>
-  τ≜<◊⁺⁺|◊⁺|◊|◊⁻|⊘>
-  ⊢<what was proved>
-  ⟩
-
-Output ONLY the AISP document. No markdown fences, no preamble.`
+Translate the following to AISP. Output only the AISP document.`
 
 export const NEEDS_CLARIFICATION_BLOCK = `\
 IF τ is ⊘:
@@ -206,9 +180,7 @@ Rules:
 - Output ONLY the updated original text. No preamble, no explanation.`
 
 export function getToEnglishSystem(mode: Mode): string {
-  return `You are translating an AISP 5.1 formal specification back to plain English.
-
-First check the evidence block (⟦Ε⟧) for the τ tier value.
+  return `Translate this AISP to English.
 
 ${MODE_INSTRUCTIONS[mode]}
 
