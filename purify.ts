@@ -28,7 +28,7 @@
  *   <numbered questions>
  */
 
-import { readFileSync, existsSync } from "fs"
+import { readFileSync, writeFileSync, existsSync } from "fs"
 import { createInterface } from "readline"
 import AISP, { calculateSemanticDensity } from "aisp-validator"
 import Anthropic from "@anthropic-ai/sdk"
@@ -243,6 +243,23 @@ IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
   - State overall confidence in one plain sentence.
   - No code blocks. Describe what code examples do in plain words.`,
 }
+
+const APPLY_SUGGESTION_SYSTEM = `\
+You are refining a specification document based on a user suggestion.
+
+You will be given:
+  ORIGINAL: the current source specification text
+  PURIFIED: the purified (formal round-trip) version that revealed ambiguities
+  SUGGESTION: the user's proposed change
+
+Produce an updated version of the ORIGINAL text that incorporates the suggestion.
+
+Rules:
+- Modify only what is necessary to address the suggestion.
+- Preserve the original's style, format, and level of detail.
+- Do not introduce information not implied by the suggestion.
+- Address any ambiguities the suggestion is trying to resolve.
+- Output ONLY the updated original text. No preamble, no explanation.`
 
 function getToEnglishSystem(mode: Mode): string {
   return `You are translating an AISP 5.1 formal specification back to plain English.
@@ -520,6 +537,7 @@ function parseArgs(argv: string[]) {
     verbose:      false,
     fromAisp:     false,
     repl:         false,
+    suggest:      false,
     help:         false,
   }
 
@@ -529,6 +547,7 @@ function parseArgs(argv: string[]) {
     else if (a === "--verbose")                 { opts.verbose = true }
     else if (a === "--from-aisp")               { opts.fromAisp = true }
     else if (a === "--repl")                    { opts.repl = true }
+    else if (a === "--suggest")                 { opts.suggest = true }
     else if (a === "--provider")                { opts.provider = args[++i] as Provider }
     else if (a === "--model")                   { opts.model = args[++i] }
     else if (a === "--purify-model")            { opts.purifyModel = args[++i] }
@@ -566,6 +585,7 @@ Options:
   --api-key      API key                                     (default: env var)
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
+  --suggest      show purified version then suggest changes applied to the original
   --verbose      write AISP and scores to stderr
   --help
 
@@ -688,6 +708,107 @@ async function runRepl(opts: {
   process.stderr.write("\nexiting...\n")
 }
 
+async function runSuggest(opts: {
+  provider: Provider
+  mainModel: string
+  purifyModel: string
+  apiKey: string
+  verbose: boolean
+  mode: Mode
+  fromAisp: boolean
+  inputFile: string | null
+  initialText: string
+}): Promise<void> {
+  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, inputFile } = opts
+  let currentText = opts.initialText
+
+  const rl = createInterface({ input: process.stdin })
+
+  process.stderr.write(
+    `purify suggest — show purified version and suggest changes to the original\n` +
+    `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n` +
+    `commands: empty line to submit · /save to write file · /exit to quit\n\n`,
+  )
+
+  process.on("SIGINT", () => {
+    process.stderr.write("\nexiting...\n")
+    rl.close()
+    process.exit(0)
+  })
+
+  async function doPurify(): Promise<string> {
+    const result = await purify({
+      text: currentText,
+      provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp,
+    })
+    process.stdout.write("\n── PURIFIED VERSION ──\n" + result + "\n── END PURIFIED ──\n\n")
+    return result
+  }
+
+  // Initial purify
+  process.stderr.write(`→ purifying initial input...\n`)
+  let purifiedResult = await doPurify()
+
+  process.stderr.write("➤ ")
+
+  let buffer: string[] = []
+
+  for await (const line of rl) {
+    if (line !== "") {
+      buffer.push(line)
+      continue
+    }
+
+    if (buffer.length === 0) {
+      process.stderr.write("➤ ")
+      continue
+    }
+
+    const input = buffer.join("\n").trim()
+    buffer = []
+
+    if (input === "/exit") break
+
+    if (input === "/save") {
+      if (!inputFile) {
+        process.stderr.write("⊘ no input file to save to — pass a file path as the argument\n")
+      } else {
+        writeFileSync(inputFile, currentText, "utf8")
+        process.stderr.write(`✓ saved to ${inputFile}\n`)
+      }
+      process.stderr.write("➤ ")
+      continue
+    }
+
+    try {
+      process.stderr.write(`→ applying suggestion...\n`)
+      const userMsg = [
+        "ORIGINAL:",
+        currentText,
+        "",
+        "PURIFIED:",
+        purifiedResult,
+        "",
+        "SUGGESTION:",
+        input,
+      ].join("\n")
+
+      currentText = await callLLM(provider, apiKey, mainModel, APPLY_SUGGESTION_SYSTEM, userMsg)
+
+      process.stdout.write("\n── UPDATED ORIGINAL ──\n" + currentText + "\n── END ORIGINAL ──\n\n")
+
+      process.stderr.write(`→ re-purifying...\n`)
+      purifiedResult = await doPurify()
+    } catch (err) {
+      process.stderr.write(`error: ${(err as Error).message}\n`)
+    }
+
+    process.stderr.write("➤ ")
+  }
+
+  process.stderr.write("\nexiting...\n")
+}
+
 async function main() {
   const { opts, positional } = parseArgs(process.argv)
 
@@ -702,6 +823,21 @@ async function main() {
     const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
     const apiKey      = resolveApiKey(provider, opts.apiKey)
     await runRepl({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp })
+    process.exit(0)
+  }
+
+  if (opts.suggest) {
+    const text = resolveInput(positional)
+    if (!text?.trim()) {
+      process.stderr.write("error: --suggest requires an input file or inline text\n")
+      process.exit(1)
+    }
+    const provider    = opts.provider
+    const mainModel   = opts.model       ?? process.env.PURIFY_MODEL       ?? DEFAULT_MODELS[provider]
+    const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
+    const apiKey      = resolveApiKey(provider, opts.apiKey)
+    const inputFile   = positional.length === 1 && existsSync(positional[0]) ? positional[0] : null
+    await runSuggest({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp, inputFile, initialText: text! })
     process.exit(0)
   }
 
@@ -720,7 +856,7 @@ async function main() {
 
   try {
     const result = await purify({
-      text,
+      text: text!,
       provider,
       mainModel,
       fromAisp: opts.fromAisp,
