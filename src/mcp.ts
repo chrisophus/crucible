@@ -29,6 +29,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 
 import { purify } from "./core.ts"
+import {
+  clarifyTranslation,
+  initContext,
+  reflectText,
+  translateText,
+  updatePurified,
+} from "./core-tools.ts"
 import { DEFAULT_CHEAP_MODELS, DEFAULT_MODELS } from "./providers.ts"
 import type { Mode, Provider } from "./types.ts"
 import { parseEvidence, runValidator } from "./validator.ts"
@@ -126,6 +133,189 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "purify_reflect",
+    description:
+      "Step 1 of the translation loop. The model states its interpretation of the text " +
+      "BEFORE formalizing it, so the author can correct any misunderstandings. " +
+      "Returns interpretation, explicit assumptions, and uncertainties. " +
+      "Never attempts formalization or generates AISP.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "The raw text to interpret",
+        },
+        context: {
+          type: "string",
+          description: "Optional project domain context from purify.context.md",
+        },
+        provider: {
+          type: "string",
+          enum: ["anthropic", "openai"],
+          description: "LLM provider (default: anthropic)",
+          default: "anthropic",
+        },
+        model: {
+          type: "string",
+          description: "Model to use (default: claude-sonnet-4-6)",
+        },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "purify_translate",
+    description:
+      "Step 2 of the translation loop. Translates natural language through AISP to precise English. " +
+      "Returns purified English, AISP intermediate, quality scores (δ, φ, τ), " +
+      "contradiction list (blocks output if non-empty), and clarification questions. " +
+      "Scores: ◊⁺⁺ platinum (δ≥0.75,φ≥95), ◊⁺ gold (δ≥0.60,φ≥80), " +
+      "◊ silver (δ≥0.40,φ≥65), ◊⁻ bronze (δ≥0.20,φ≥40), ⊘ invalid.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: {
+          type: "string",
+          description: "The raw text to translate",
+        },
+        context: {
+          type: "string",
+          description: "Optional project domain context from purify.context.md",
+        },
+        interpretation: {
+          type: "string",
+          description: "Corrected interpretation from a prior purify_reflect call",
+        },
+        provider: {
+          type: "string",
+          enum: ["anthropic", "openai"],
+          description: "LLM provider (default: anthropic)",
+          default: "anthropic",
+        },
+        model: {
+          type: "string",
+          description: "Main model for AISP→English step (default: claude-sonnet-4-6)",
+        },
+        cheap_model: {
+          type: "string",
+          description: "Cheap model for English→AISP step (default: claude-haiku-4-5-20251001)",
+        },
+      },
+      required: ["text"],
+    },
+  },
+  {
+    name: "purify_clarify",
+    description:
+      "Iterative refinement step. Takes an existing AISP document and answers to clarifying questions, " +
+      "then returns an updated translation with improved scores. " +
+      "Repeat until τ ≥ ◊⁺ or the author accepts the current tier.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        aisp: {
+          type: "string",
+          description: "The existing AISP document from a prior purify_translate or purify_clarify call",
+        },
+        context: {
+          type: "string",
+          description: "Optional project domain context from purify.context.md",
+        },
+        answers: {
+          type: "array",
+          description: "Answers to the clarifying questions from the prior translation result",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string", description: "The clarifying question" },
+              answer: { type: "string", description: "The author's answer" },
+            },
+            required: ["question", "answer"],
+          },
+        },
+        provider: {
+          type: "string",
+          enum: ["anthropic", "openai"],
+          description: "LLM provider (default: anthropic)",
+          default: "anthropic",
+        },
+        model: {
+          type: "string",
+          description: "Model to use (default: claude-sonnet-4-6)",
+        },
+      },
+      required: ["aisp", "answers"],
+    },
+  },
+  {
+    name: "purify_update",
+    description:
+      "Updates existing purified content in place. Edits only the affected sections — " +
+      "never regenerates from scratch. Preserves the style, spirit, and flow of unchanged sections. " +
+      "Returns the updated purified text, updated AISP, scores, a section-level diff, and contradiction check.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        existing_purified: {
+          type: "string",
+          description: "The current purified English text to update",
+        },
+        existing_aisp: {
+          type: "string",
+          description: "The current AISP document corresponding to the purified text",
+        },
+        change: {
+          type: "string",
+          description: "Natural language description of the requested change",
+        },
+        context: {
+          type: "string",
+          description: "Optional project domain context from purify.context.md",
+        },
+        provider: {
+          type: "string",
+          enum: ["anthropic", "openai"],
+          description: "LLM provider (default: anthropic)",
+          default: "anthropic",
+        },
+        model: {
+          type: "string",
+          description: "Model to use (default: claude-sonnet-4-6)",
+        },
+      },
+      required: ["existing_purified", "existing_aisp", "change"],
+    },
+  },
+  {
+    name: "purify_init",
+    description:
+      "One-time project setup. Reads existing project files (specs, schemas, docs, AISP files) " +
+      "and generates the content for purify.context.md — a domain model that improves all subsequent " +
+      "purify calls for this project.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        files: {
+          type: "array",
+          description: "Absolute or relative paths to project files to extract context from",
+          items: { type: "string" },
+        },
+        provider: {
+          type: "string",
+          enum: ["anthropic", "openai"],
+          description: "LLM provider (default: anthropic)",
+          default: "anthropic",
+        },
+        model: {
+          type: "string",
+          description: "Model to use (default: claude-sonnet-4-6)",
+        },
+      },
+      required: ["files"],
+    },
+  },
+  {
     name: "parse_aisp_evidence",
     description:
       "Extract the self-reported quality evidence from an AISP 5.1 document's ⟦Ε⟧ block. " +
@@ -156,6 +346,92 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params
 
   try {
+    if (name === "purify_reflect") {
+      const { text, context, provider = "anthropic", model } = args as {
+        text: string
+        context?: string
+        provider?: Provider
+        model?: string
+      }
+      const result = await reflectText(text, context, { provider, model })
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
+    if (name === "purify_translate") {
+      const {
+        text,
+        context,
+        interpretation,
+        provider = "anthropic",
+        model,
+        cheap_model,
+      } = args as {
+        text: string
+        context?: string
+        interpretation?: string
+        provider?: Provider
+        model?: string
+        cheap_model?: string
+      }
+      const result = await translateText(text, context, interpretation, {
+        provider,
+        model,
+        cheapModel: cheap_model,
+      })
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
+    if (name === "purify_clarify") {
+      const {
+        aisp,
+        context,
+        answers,
+        provider = "anthropic",
+        model,
+      } = args as {
+        aisp: string
+        context?: string
+        answers: Array<{ question: string; answer: string }>
+        provider?: Provider
+        model?: string
+      }
+      const result = await clarifyTranslation(aisp, context, answers, { provider, model })
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
+    if (name === "purify_update") {
+      const {
+        existing_purified,
+        existing_aisp,
+        change,
+        context,
+        provider = "anthropic",
+        model,
+      } = args as {
+        existing_purified: string
+        existing_aisp: string
+        change: string
+        context?: string
+        provider?: Provider
+        model?: string
+      }
+      const result = await updatePurified(existing_purified, existing_aisp, change, context, {
+        provider,
+        model,
+      })
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
+    if (name === "purify_init") {
+      const { files, provider = "anthropic", model } = args as {
+        files: string[]
+        provider?: Provider
+        model?: string
+      }
+      const result = await initContext(files, { provider, model })
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
     if (name === "purify_spec") {
       const {
         text,
