@@ -29,21 +29,28 @@ import {
 } from "@modelcontextprotocol/sdk/types.js"
 
 import { purify } from "./core.ts"
-import { runValidator, parseEvidence } from "./validator.ts"
-import { DEFAULT_MODELS, DEFAULT_CHEAP_MODELS } from "./providers.ts"
-import type { Provider, Mode } from "./types.ts"
+import { DEFAULT_CHEAP_MODELS, DEFAULT_MODELS } from "./providers.ts"
+import type { Mode, Provider } from "./types.ts"
+import { parseEvidence, runValidator } from "./validator.ts"
 
-const VALID_MODES: Mode[] = ["formal", "narrative", "hybrid", "sketch", "summary"]
+const VALID_MODES: Mode[] = [
+  "formal",
+  "narrative",
+  "hybrid",
+  "sketch",
+  "summary",
+]
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function resolveApiKey(provider: Provider): string {
   const envVars: Record<Provider, string> = {
     anthropic: "ANTHROPIC_API_KEY",
-    openai:    "OPENAI_API_KEY",
+    openai: "OPENAI_API_KEY",
   }
   const key = process.env[envVars[provider]]
-  if (!key) throw new Error(`${envVars[provider]} environment variable is not set`)
+  if (!key)
+    throw new Error(`${envVars[provider]} environment variable is not set`)
   return key
 }
 
@@ -62,7 +69,8 @@ const TOOLS: Tool[] = [
       properties: {
         text: {
           type: "string",
-          description: "The specification text to purify (English prose or markdown)",
+          description:
+            "The specification text to purify (English prose or markdown)",
         },
         mode: {
           type: "string",
@@ -81,15 +89,18 @@ const TOOLS: Tool[] = [
         },
         model: {
           type: "string",
-          description: "Main model for AISP→English step (default: claude-sonnet-4-6)",
+          description:
+            "Main model for AISP→English step (default: claude-sonnet-4-6)",
         },
         purify_model: {
           type: "string",
-          description: "Cheap model for English→AISP step (default: claude-haiku-4-5-20251001)",
+          description:
+            "Cheap model for English→AISP step (default: claude-haiku-4-5-20251001)",
         },
         from_aisp: {
           type: "boolean",
-          description: "Set to true if the input is already an AISP document (skip step 1)",
+          description:
+            "Set to true if the input is already an AISP document (skip step 1)",
           default: false,
         },
       },
@@ -148,11 +159,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === "purify_spec") {
       const {
         text,
-        mode       = "narrative",
-        provider   = "anthropic",
+        mode = "narrative",
+        provider = "anthropic",
         model,
         purify_model,
-        from_aisp  = false,
+        from_aisp = false,
       } = args as {
         text: string
         mode?: Mode
@@ -162,10 +173,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         from_aisp?: boolean
       }
 
-      const resolvedProvider   = provider as Provider
-      const mainModel          = model         ?? process.env.PURIFY_MODEL       ?? DEFAULT_MODELS[resolvedProvider]
-      const purifyModel        = purify_model  ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[resolvedProvider]
-      const apiKey             = resolveApiKey(resolvedProvider)
+      const resolvedProvider = provider as Provider
+      const mainModel =
+        model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[resolvedProvider]
+      const purifyModel =
+        purify_model ??
+        process.env.PURIFY_MODEL_CHEAP ??
+        DEFAULT_CHEAP_MODELS[resolvedProvider]
+      const apiKey = resolveApiKey(resolvedProvider)
 
       const result = await purify({
         text,
@@ -178,6 +193,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         fromAisp: from_aisp,
         baseUrl: process.env.OPENAI_BASE_URL,
         openaiUser: process.env.OPENAI_USER,
+        insecure: process.env.OPENAI_INSECURE === "1",
       })
 
       return {
@@ -190,7 +206,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const result = await runValidator(aisp)
       if (!result) {
         return {
-          content: [{ type: "text", text: JSON.stringify({ error: "validator unavailable" }) }],
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: "validator unavailable" }),
+            },
+          ],
         }
       }
       return {

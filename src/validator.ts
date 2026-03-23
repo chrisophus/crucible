@@ -3,10 +3,10 @@ import type { Evidence, ValidatorResult } from "./types.ts"
 
 export const TIER_NAMES: Record<string, string> = {
   "◊⁺⁺": "platinum",
-  "◊⁺":  "gold",
-  "◊":   "silver",
-  "◊⁻":  "bronze",
-  "⊘":   "invalid",
+  "◊⁺": "gold",
+  "◊": "silver",
+  "◊⁻": "bronze",
+  "⊘": "invalid",
 }
 
 export function parseEvidence(aisp: string): Evidence {
@@ -19,11 +19,16 @@ export function parseEvidence(aisp: string): Evidence {
   if (tierMatch) {
     tierSymbol = tierMatch[1]
   } else if (delta !== null) {
-    tierSymbol = delta >= 0.75 ? "◊⁺⁺"
-               : delta >= 0.60 ? "◊⁺"
-               : delta >= 0.40 ? "◊"
-               : delta >= 0.20 ? "◊⁻"
-               : "⊘"
+    tierSymbol =
+      delta >= 0.75
+        ? "◊⁺⁺"
+        : delta >= 0.6
+          ? "◊⁺"
+          : delta >= 0.4
+            ? "◊"
+            : delta >= 0.2
+              ? "◊⁻"
+              : "⊘"
   }
 
   return { delta, tierSymbol, tierName: TIER_NAMES[tierSymbol] ?? "unknown" }
@@ -31,14 +36,23 @@ export function parseEvidence(aisp: string): Evidence {
 
 let validatorInitialized = false
 
-export async function runValidator(aisp: string): Promise<ValidatorResult | null> {
+export async function runValidator(
+  aisp: string,
+): Promise<ValidatorResult | null> {
   try {
     if (!validatorInitialized) {
       await AISP.init()
       validatorInitialized = true
     }
-    const result = AISP.validate(aisp) as { valid: boolean; tier?: string; ambiguity?: number }
-    const density = calculateSemanticDensity(aisp) as { delta: number; pureDensity: number }
+    const result = AISP.validate(aisp) as {
+      valid: boolean
+      tier?: string
+      ambiguity?: number
+    }
+    const density = calculateSemanticDensity(aisp) as {
+      delta: number
+      pureDensity: number
+    }
     return {
       valid: result.valid ?? true,
       delta: density.delta,

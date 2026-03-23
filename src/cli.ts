@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+
 /**
  * purify — AISP round-trip spec purification
  *
@@ -30,14 +31,24 @@
  *   <numbered questions>
  */
 
-import { readFileSync, writeFileSync, existsSync } from "fs"
-import { createInterface } from "readline"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { createInterface } from "node:readline"
 import Anthropic from "@anthropic-ai/sdk"
-import { purify, eprint } from "./core.ts"
-import { callLLM, callLLMRepl, callLLMWithTools, DEFAULT_MODELS, DEFAULT_CHEAP_MODELS } from "./providers.ts"
-import { runValidator, parseEvidence, TIER_NAMES } from "./validator.ts"
-import { TO_AISP_SYSTEM, APPLY_SUGGESTION_SYSTEM, getReplSystem } from "./prompts.ts"
-import type { Provider, Mode, ConvMessage } from "./types.ts"
+import { eprint, purify } from "./core.ts"
+import {
+  APPLY_SUGGESTION_SYSTEM,
+  getReplSystem,
+  TO_AISP_SYSTEM,
+} from "./prompts.ts"
+import {
+  callLLM,
+  callLLMRepl,
+  callLLMWithTools,
+  DEFAULT_CHEAP_MODELS,
+  DEFAULT_MODELS,
+} from "./providers.ts"
+import type { ConvMessage, Mode, Provider } from "./types.ts"
+import { parseEvidence, runValidator, TIER_NAMES } from "./validator.ts"
 
 // ── Error logging ──────────────────────────────────────────────────────────────
 
@@ -46,12 +57,14 @@ function logError(err: unknown): void {
     process.stderr.write(`error: ${err.message}\n`)
     // HTTP/network errors from Anthropic or OpenAI SDKs expose status + headers
     const e = err as unknown as Record<string, unknown>
-    if (e["status"] !== undefined)  process.stderr.write(`  status: ${e["status"]}\n`)
-    if (e["code"]   !== undefined)  process.stderr.write(`  code: ${e["code"]}\n`)
-    if (e["url"]    !== undefined)  process.stderr.write(`  url: ${e["url"]}\n`)
+    if (e.status !== undefined) process.stderr.write(`  status: ${e.status}\n`)
+    if (e.code !== undefined) process.stderr.write(`  code: ${e.code}\n`)
+    if (e.url !== undefined) process.stderr.write(`  url: ${e.url}\n`)
     // OpenAI APIError exposes the raw response body
-    if (e["error"]  !== undefined)  process.stderr.write(`  body: ${JSON.stringify(e["error"])}\n`)
-    if (err.cause   !== undefined)  process.stderr.write(`  cause: ${String(err.cause)}\n`)
+    if (e.error !== undefined)
+      process.stderr.write(`  body: ${JSON.stringify(e.error)}\n`)
+    if (err.cause !== undefined)
+      process.stderr.write(`  cause: ${String(err.cause)}\n`)
   } else {
     process.stderr.write(`error: ${String(err)}\n`)
   }
@@ -77,7 +90,7 @@ function resolveApiKey(provider: Provider, explicit: string | null): string {
   if (explicit) return explicit
   const envVars: Record<Provider, string> = {
     anthropic: "ANTHROPIC_API_KEY",
-    openai:    "OPENAI_API_KEY",
+    openai: "OPENAI_API_KEY",
   }
   const key = process.env[envVars[provider]]
   if (!key) {
@@ -87,7 +100,13 @@ function resolveApiKey(provider: Provider, explicit: string | null): string {
   return key
 }
 
-const VALID_MODES: Mode[] = ["formal", "narrative", "hybrid", "sketch", "summary"]
+const VALID_MODES: Mode[] = [
+  "formal",
+  "narrative",
+  "hybrid",
+  "sketch",
+  "summary",
+]
 
 /**
  * Parse a skill markdown file and extract the mode from it.
@@ -110,7 +129,9 @@ function parseModeFile(filePath: string): Mode {
     if (modeMatch) {
       const mode = modeMatch[1].toLowerCase() as Mode
       if (!VALID_MODES.includes(mode)) {
-        process.stderr.write(`error: invalid mode "${mode}" in ${filePath}. Valid modes: ${VALID_MODES.join(", ")}\n`)
+        process.stderr.write(
+          `error: invalid mode "${mode}" in ${filePath}. Valid modes: ${VALID_MODES.join(", ")}\n`,
+        )
         process.exit(1)
       }
       return mode
@@ -118,15 +139,23 @@ function parseModeFile(filePath: string): Mode {
   }
 
   // Fall back to ## Mode section
-  const modeSectionMatch = content.match(/^##\s+Mode\s*\r?\n([\s\S]*?)(?:^##|\Z)/m)
+  const modeSectionMatch = content.match(
+    /^##\s+Mode\s*\r?\n([\s\S]*?)(?:^##|Z)/m,
+  )
   if (modeSectionMatch) {
-    const firstLine = modeSectionMatch[1].split(/\r?\n/).find(l => l.trim())?.trim().toLowerCase() as Mode | undefined
+    const firstLine = modeSectionMatch[1]
+      .split(/\r?\n/)
+      .find((l) => l.trim())
+      ?.trim()
+      .toLowerCase() as Mode | undefined
     if (firstLine && VALID_MODES.includes(firstLine)) {
       return firstLine
     }
   }
 
-  process.stderr.write(`error: no valid mode found in ${filePath}. Add "mode: <value>" to frontmatter or a "## Mode" section.\n`)
+  process.stderr.write(
+    `error: no valid mode found in ${filePath}. Add "mode: <value>" to frontmatter or a "## Mode" section.\n`,
+  )
   process.exit(1)
 }
 
@@ -134,47 +163,71 @@ function parseArgs(argv: string[]) {
   const args = argv.slice(2)
   const positional: string[] = []
   const opts = {
-    provider:     (process.env.PURIFY_PROVIDER ?? "anthropic") as Provider,
-    model:        null as string | null,
-    purifyModel:  null as string | null,
-    apiKey:       null as string | null,
-    baseUrl:      (process.env.OPENAI_BASE_URL ?? null) as string | null,
-    openaiUser:   (process.env.OPENAI_USER ?? null) as string | null,
-    mode:         (process.env.PURIFY_MODE ?? "narrative") as Mode,
-    modeFile:     (process.env.PURIFY_MODE_FILE ?? null) as string | null,
-    verbose:      false,
-    fromAisp:     false,
-    repl:         false,
-    suggest:      false,
-    thinking:     false,
-    estimate:     false,
-    help:         false,
+    provider: (process.env.PURIFY_PROVIDER ?? "anthropic") as Provider,
+    model: null as string | null,
+    purifyModel: null as string | null,
+    apiKey: null as string | null,
+    baseUrl: (process.env.OPENAI_BASE_URL ?? null) as string | null,
+    openaiUser: (process.env.OPENAI_USER ?? null) as string | null,
+    insecure: process.env.OPENAI_INSECURE === "1",
+    mode: (process.env.PURIFY_MODE ?? "narrative") as Mode,
+    modeFile: (process.env.PURIFY_MODE_FILE ?? null) as string | null,
+    verbose: false,
+    fromAisp: false,
+    repl: false,
+    suggest: false,
+    thinking: false,
+    estimate: false,
+    help: false,
   }
 
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
-    if (a === "--help" || a === "-h")          { opts.help = true }
-    else if (a === "--verbose")                 { opts.verbose = true }
-    else if (a === "--from-aisp")               { opts.fromAisp = true }
-    else if (a === "--repl")                    { opts.repl = true }
-    else if (a === "--suggest")                 { opts.suggest = true }
-    else if (a === "--thinking")                { opts.thinking = true }
-    else if (a === "--estimate")                { opts.estimate = true }
-    else if (a === "--provider")                { opts.provider = args[++i] as Provider }
-    else if (a === "--model")                   { opts.model = args[++i] }
-    else if (a === "--purify-model")            { opts.purifyModel = args[++i] }
-    else if (a === "--mode")                    { opts.mode = args[++i] as Mode }
-    else if (a === "--mode-file")               { opts.modeFile = args[++i] }
-    else if (a === "--formal")                  { opts.mode = "formal" }
-    else if (a === "--narrative")               { opts.mode = "narrative" }
-    else if (a === "--hybrid")                  { opts.mode = "hybrid" }
-    else if (a === "--sketch")                  { opts.mode = "sketch" }
-    else if (a === "--summary")                 { opts.mode = "summary" }
-    else if (a === "--api-key")                 { opts.apiKey = args[++i] }
-    else if (a === "--base-url")                { opts.baseUrl = args[++i] }
-    else if (a === "--user")                    { opts.openaiUser = args[++i] }
-    else if (!a.startsWith("--"))               { positional.push(a) }
-    else {
+    if (a === "--help" || a === "-h") {
+      opts.help = true
+    } else if (a === "--verbose") {
+      opts.verbose = true
+    } else if (a === "--from-aisp") {
+      opts.fromAisp = true
+    } else if (a === "--repl") {
+      opts.repl = true
+    } else if (a === "--suggest") {
+      opts.suggest = true
+    } else if (a === "--thinking") {
+      opts.thinking = true
+    } else if (a === "--estimate") {
+      opts.estimate = true
+    } else if (a === "--provider") {
+      opts.provider = args[++i] as Provider
+    } else if (a === "--model") {
+      opts.model = args[++i]
+    } else if (a === "--purify-model") {
+      opts.purifyModel = args[++i]
+    } else if (a === "--mode") {
+      opts.mode = args[++i] as Mode
+    } else if (a === "--mode-file") {
+      opts.modeFile = args[++i]
+    } else if (a === "--formal") {
+      opts.mode = "formal"
+    } else if (a === "--narrative") {
+      opts.mode = "narrative"
+    } else if (a === "--hybrid") {
+      opts.mode = "hybrid"
+    } else if (a === "--sketch") {
+      opts.mode = "sketch"
+    } else if (a === "--summary") {
+      opts.mode = "summary"
+    } else if (a === "--api-key") {
+      opts.apiKey = args[++i]
+    } else if (a === "--base-url") {
+      opts.baseUrl = args[++i]
+    } else if (a === "--user") {
+      opts.openaiUser = args[++i]
+    } else if (a === "--insecure") {
+      opts.insecure = true
+    } else if (!a.startsWith("--")) {
+      positional.push(a)
+    } else {
       process.stderr.write(`error: unknown option ${a}\n`)
       process.exit(1)
     }
@@ -182,10 +235,17 @@ function parseArgs(argv: string[]) {
 
   // Resolve mode from file if provided (mode file takes precedence over env var,
   // but explicit --mode / --formal etc. flags take precedence over mode file)
-  const modeSetByFlag = argv.slice(2).some(a =>
-    a === "--mode" || a === "--formal" || a === "--narrative" ||
-    a === "--hybrid" || a === "--sketch" || a === "--summary"
-  )
+  const modeSetByFlag = argv
+    .slice(2)
+    .some(
+      (a) =>
+        a === "--mode" ||
+        a === "--formal" ||
+        a === "--narrative" ||
+        a === "--hybrid" ||
+        a === "--sketch" ||
+        a === "--summary",
+    )
   if (opts.modeFile && !modeSetByFlag) {
     opts.mode = parseModeFile(opts.modeFile)
   }
@@ -211,6 +271,7 @@ Options:
   --api-key      API key                                     (default: env var)
   --base-url     OpenAI-compatible base URL                  (default: OPENAI_BASE_URL)
   --user         OpenAI user identifier for tracking         (default: OPENAI_USER)
+  --insecure     disable TLS certificate verification        (default: OPENAI_INSECURE=1)
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
   --suggest      show purified version then suggest changes applied to the original
@@ -231,7 +292,7 @@ Mode files:
   section. Example: purify --mode-file .claude/skills/sketch-mode.md
 
 Environment:
-  ANTHROPIC_API_KEY  OPENAI_API_KEY  OPENAI_BASE_URL  OPENAI_USER
+  ANTHROPIC_API_KEY  OPENAI_API_KEY  OPENAI_BASE_URL  OPENAI_USER  OPENAI_INSECURE
   PURIFY_PROVIDER    PURIFY_MODEL    PURIFY_MODEL_CHEAP  PURIFY_MODE
   PURIFY_MODE_FILE   path to a skill markdown file (overridden by --mode-file)
 
@@ -258,15 +319,27 @@ async function runRepl(opts: {
   fromAisp: boolean
   baseUrl: string | null
   openaiUser: string | null
+  insecure: boolean
 }): Promise<void> {
-  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, baseUrl, openaiUser } = opts
+  const {
+    provider,
+    mainModel,
+    purifyModel,
+    apiKey,
+    verbose,
+    mode,
+    fromAisp,
+    baseUrl,
+    openaiUser,
+    insecure,
+  } = opts
   const messages: ConvMessage[] = []
 
   const rl = createInterface({ input: process.stdin })
 
   process.stderr.write(
     `purify repl — empty line to submit, /exit or ctrl-c to quit\n` +
-    `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n\n`,
+      `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n\n`,
   )
   process.stderr.write("➤ ")
 
@@ -308,32 +381,68 @@ async function runRepl(opts: {
       let aisp = input
       if (!fromAisp) {
         process.stderr.write(`→ purifying (${purifyModel})...\n`)
-        aisp = provider === "anthropic"
-          ? await callLLMWithTools(apiKey, purifyModel, input)
-          : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, input, { baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined })
+        aisp =
+          provider === "anthropic"
+            ? await callLLMWithTools(apiKey, purifyModel, input)
+            : await callLLM(
+                provider,
+                apiKey,
+                purifyModel,
+                TO_AISP_SYSTEM,
+                input,
+                {
+                  baseUrl: baseUrl ?? undefined,
+                  openaiUser: openaiUser ?? undefined,
+                  insecure,
+                },
+              )
       }
 
       if (verbose) {
-        process.stderr.write("\n── AISP ──\n" + aisp + "\n──────────\n\n")
+        process.stderr.write(`\n── AISP ──\n${aisp}\n──────────\n\n`)
       }
 
       // Validate and score the AISP
-      const vr    = await runValidator(aisp)
-      const self  = parseEvidence(aisp)
+      const vr = await runValidator(aisp)
+      const self = parseEvidence(aisp)
       const delta = vr?.delta ?? self.delta
-      const tierSym = delta === null ? "⊘"
-        : delta >= 0.75 ? "◊⁺⁺" : delta >= 0.60 ? "◊⁺"
-        : delta >= 0.40 ? "◊"   : delta >= 0.20 ? "◊⁻" : "⊘"
-      const tierName  = TIER_NAMES[tierSym] ?? "unknown"
-      const deltaStr  = delta !== null ? `δ=${delta.toFixed(2)}` : "δ=?"
-      const selfStr   = self.delta !== null ? `, self_δ=${self.delta.toFixed(2)}` : ""
-      process.stderr.write(`QUALITY: ${tierSym} ${tierName} (${deltaStr}${selfStr})\n`)
+      const tierSym =
+        delta === null
+          ? "⊘"
+          : delta >= 0.75
+            ? "◊⁺⁺"
+            : delta >= 0.6
+              ? "◊⁺"
+              : delta >= 0.4
+                ? "◊"
+                : delta >= 0.2
+                  ? "◊⁻"
+                  : "⊘"
+      const tierName = TIER_NAMES[tierSym] ?? "unknown"
+      const deltaStr = delta !== null ? `δ=${delta.toFixed(2)}` : "δ=?"
+      const selfStr =
+        self.delta !== null ? `, self_δ=${self.delta.toFixed(2)}` : ""
+      process.stderr.write(
+        `QUALITY: ${tierSym} ${tierName} (${deltaStr}${selfStr})\n`,
+      )
 
       // Step 3: AISP → English via main model with full conversation history (streamed)
       messages.push({ role: "user", content: aisp })
       process.stderr.write(`→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
-      const response = await callLLMRepl(provider, apiKey, mainModel, getReplSystem(mode), messages, process.stdout, { baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined })
+      const response = await callLLMRepl(
+        provider,
+        apiKey,
+        mainModel,
+        getReplSystem(mode),
+        messages,
+        process.stdout,
+        {
+          baseUrl: baseUrl ?? undefined,
+          openaiUser: openaiUser ?? undefined,
+          insecure,
+        },
+      )
       messages.push({ role: "assistant", content: response })
 
       process.stdout.write("\n\n")
@@ -361,16 +470,29 @@ async function runSuggest(opts: {
   initialText: string
   baseUrl: string | null
   openaiUser: string | null
+  insecure: boolean
 }): Promise<void> {
-  const { provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp, inputFile, baseUrl, openaiUser } = opts
+  const {
+    provider,
+    mainModel,
+    purifyModel,
+    apiKey,
+    verbose,
+    mode,
+    fromAisp,
+    inputFile,
+    baseUrl,
+    openaiUser,
+    insecure,
+  } = opts
   let currentText = opts.initialText
 
   const rl = createInterface({ input: process.stdin })
 
   process.stderr.write(
     `purify suggest — show purified version and suggest changes to the original\n` +
-    `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n` +
-    `commands: empty line to submit · /save to write file · /exit to quit\n\n`,
+      `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n` +
+      `commands: empty line to submit · /save to write file · /exit to quit\n\n`,
   )
 
   process.on("SIGINT", () => {
@@ -382,10 +504,20 @@ async function runSuggest(opts: {
   async function doPurify(): Promise<string> {
     const result = await purify({
       text: currentText,
-      provider, mainModel, purifyModel, apiKey, verbose, mode, fromAisp,
-      baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined,
+      provider,
+      mainModel,
+      purifyModel,
+      apiKey,
+      verbose,
+      mode,
+      fromAisp,
+      baseUrl: baseUrl ?? undefined,
+      openaiUser: openaiUser ?? undefined,
+      insecure,
     })
-    process.stdout.write("\n── PURIFIED VERSION ──\n" + result + "\n── END PURIFIED ──\n\n")
+    process.stdout.write(
+      `\n── PURIFIED VERSION ──\n${result}\n── END PURIFIED ──\n\n`,
+    )
     return result
   }
 
@@ -415,7 +547,9 @@ async function runSuggest(opts: {
 
     if (input === "/save") {
       if (!inputFile) {
-        process.stderr.write("⊘ no input file to save to — pass a file path as the argument\n")
+        process.stderr.write(
+          "⊘ no input file to save to — pass a file path as the argument\n",
+        )
       } else {
         writeFileSync(inputFile, currentText, "utf8")
         process.stderr.write(`✓ saved to ${inputFile}\n`)
@@ -437,9 +571,22 @@ async function runSuggest(opts: {
         input,
       ].join("\n")
 
-      currentText = await callLLM(provider, apiKey, mainModel, APPLY_SUGGESTION_SYSTEM, userMsg, { baseUrl: baseUrl ?? undefined, openaiUser: openaiUser ?? undefined })
+      currentText = await callLLM(
+        provider,
+        apiKey,
+        mainModel,
+        APPLY_SUGGESTION_SYSTEM,
+        userMsg,
+        {
+          baseUrl: baseUrl ?? undefined,
+          openaiUser: openaiUser ?? undefined,
+          insecure,
+        },
+      )
 
-      process.stdout.write("\n── UPDATED ORIGINAL ──\n" + currentText + "\n── END ORIGINAL ──\n\n")
+      process.stdout.write(
+        `\n── UPDATED ORIGINAL ──\n${currentText}\n── END ORIGINAL ──\n\n`,
+      )
 
       process.stderr.write(`→ re-purifying...\n`)
       purifiedResult = await doPurify()
@@ -464,26 +611,63 @@ async function main() {
   }
 
   if (opts.repl) {
-    const provider    = opts.provider
-    const mainModel   = opts.model       ?? process.env.PURIFY_MODEL       ?? DEFAULT_MODELS[provider]
-    const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
-    const apiKey      = resolveApiKey(provider, opts.apiKey)
-    await runRepl({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp, baseUrl: opts.baseUrl, openaiUser: opts.openaiUser })
+    const provider = opts.provider
+    const mainModel =
+      opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
+    const purifyModel =
+      opts.purifyModel ??
+      process.env.PURIFY_MODEL_CHEAP ??
+      DEFAULT_CHEAP_MODELS[provider]
+    const apiKey = resolveApiKey(provider, opts.apiKey)
+    await runRepl({
+      provider,
+      mainModel,
+      purifyModel,
+      apiKey,
+      verbose: opts.verbose,
+      mode: opts.mode,
+      fromAisp: opts.fromAisp,
+      baseUrl: opts.baseUrl,
+      openaiUser: opts.openaiUser,
+      insecure: opts.insecure,
+    })
     process.exit(0)
   }
 
   if (opts.suggest) {
     const text = resolveInput(positional)
     if (!text?.trim()) {
-      process.stderr.write("error: --suggest requires an input file or inline text\n")
+      process.stderr.write(
+        "error: --suggest requires an input file or inline text\n",
+      )
       process.exit(1)
     }
-    const provider    = opts.provider
-    const mainModel   = opts.model       ?? process.env.PURIFY_MODEL       ?? DEFAULT_MODELS[provider]
-    const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
-    const apiKey      = resolveApiKey(provider, opts.apiKey)
-    const inputFile   = positional.length === 1 && existsSync(positional[0]) ? positional[0] : null
-    await runSuggest({ provider, mainModel, purifyModel, apiKey, verbose: opts.verbose, mode: opts.mode, fromAisp: opts.fromAisp, inputFile, initialText: text!, baseUrl: opts.baseUrl, openaiUser: opts.openaiUser })
+    const provider = opts.provider
+    const mainModel =
+      opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
+    const purifyModel =
+      opts.purifyModel ??
+      process.env.PURIFY_MODEL_CHEAP ??
+      DEFAULT_CHEAP_MODELS[provider]
+    const apiKey = resolveApiKey(provider, opts.apiKey)
+    const inputFile =
+      positional.length === 1 && existsSync(positional[0])
+        ? positional[0]
+        : null
+    await runSuggest({
+      provider,
+      mainModel,
+      purifyModel,
+      apiKey,
+      verbose: opts.verbose,
+      mode: opts.mode,
+      fromAisp: opts.fromAisp,
+      inputFile,
+      initialText: text!,
+      baseUrl: opts.baseUrl,
+      openaiUser: opts.openaiUser,
+      insecure: opts.insecure,
+    })
     process.exit(0)
   }
 
@@ -493,14 +677,20 @@ async function main() {
     process.exit(0)
   }
 
-  const provider   = opts.provider
-  const mainModel  = opts.model        ?? process.env.PURIFY_MODEL        ?? DEFAULT_MODELS[provider]
-  const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP  ?? DEFAULT_CHEAP_MODELS[provider]
-  const apiKey     = resolveApiKey(provider, opts.apiKey)
+  const provider = opts.provider
+  const mainModel =
+    opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
+  const purifyModel =
+    opts.purifyModel ??
+    process.env.PURIFY_MODEL_CHEAP ??
+    DEFAULT_CHEAP_MODELS[provider]
+  const apiKey = resolveApiKey(provider, opts.apiKey)
 
   if (opts.estimate) {
     if (provider !== "anthropic") {
-      process.stderr.write("error: --estimate is only supported with --provider anthropic\n")
+      process.stderr.write(
+        "error: --estimate is only supported with --provider anthropic\n",
+      )
       process.exit(1)
     }
     const client = new Anthropic({ apiKey })
@@ -511,12 +701,15 @@ async function main() {
     })
     process.stdout.write(
       `Step 1 input tokens (${purifyModel}): ${count.input_tokens}\n` +
-      `(Step 3 tokens depend on AISP output — run without --estimate for full output)\n`,
+        `(Step 3 tokens depend on AISP output — run without --estimate for full output)\n`,
     )
     process.exit(0)
   }
 
-  eprint(`purify: provider=${provider} purify=${purifyModel} main=${mainModel} mode=${opts.mode}`, opts.verbose)
+  eprint(
+    `purify: provider=${provider} purify=${purifyModel} main=${mainModel} mode=${opts.mode}`,
+    opts.verbose,
+  )
 
   try {
     await purify({
@@ -532,6 +725,7 @@ async function main() {
       stream: true,
       baseUrl: opts.baseUrl ?? undefined,
       openaiUser: opts.openaiUser ?? undefined,
+      insecure: opts.insecure,
     })
     process.stdout.write("\n")
   } catch (err) {

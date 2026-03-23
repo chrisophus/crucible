@@ -1,7 +1,11 @@
 declare module "aisp-validator" {
   interface AISPModule {
     init(): Promise<void>
-    validate(aisp: string): { valid: boolean; tier?: string; ambiguity?: number }
+    validate(aisp: string): {
+      valid: boolean
+      tier?: string
+      ambiguity?: number
+    }
   }
 
   interface SemanticDensity {

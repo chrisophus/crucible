@@ -190,9 +190,12 @@ Output only the markdown or the NEEDS_CLARIFICATION block. No preamble.`
 }
 
 export function getReplSystem(mode: Mode): string {
-  return getToEnglishSystem(mode) + `\n\n\
+  return (
+    getToEnglishSystem(mode) +
+    `\n\n\
 You are in an interactive refinement session. \
 Maintain continuity with the conversation history — when the user refines or \
 extends a spec, integrate the changes and return the complete current specification. \
 Each user message is an AISP document representing their intent.`
+  )
 }
