@@ -255,6 +255,8 @@ Analyze the AISP document for logical contradictions. Check for:
 3. conflicting_write_authority: Two sources unconditionally own the same field
 4. violated_uniqueness: A uniqueness constraint conflicts with a multiplicity rule
 
+All field values must be plain English. No AISP notation, formal symbols, or mathematical syntax anywhere in the output.
+
 Output JSON only, no markdown fences:
 {
   "contradictions": [
