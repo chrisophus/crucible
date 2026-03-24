@@ -122,15 +122,18 @@ IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
 
   narrative: `\
 IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to flowing connected prose. No AISP notation in output.
-  - Write a brief prose introduction for the whole document.
-  - For each section, write one or two paragraphs of plain English.
+  Translate to plain conversational prose — the kind a thoughtful teammate would write when explaining something to another person. No AISP notation in output.
+  - Do NOT use AISP section names as headings (not "Types", "Rules", "Functions", "Errors", "Evidence", "Meta"). Choose headings that describe what the content means to a reader.
+  - Omit the Evidence block entirely.
+  - Write a short opening paragraph explaining what this is and what it does.
+  - Group related ideas together naturally. Use the section structure as a guide, not a template to copy.
+  - Describe functions and processes in terms of what happens and why, not as named signatures. Do not list function names unless they are meaningful to the reader.
+  - For errors and edge cases, a short prose paragraph is better than a table.
   - Use connective language: "whenever", "which means", "so that", "in other words".
-  - Use tables only for compact enumerations where prose would be harder to scan.
-  - Preserve all code blocks exactly.
+  - Preserve code examples that illustrate concrete values (e.g. example payee strings). Omit code that is just formal notation restated in a different syntax.
   - Do not add rationale not in the source.
   - No hedge words: never use "typically", "usually", "often", "generally".
-  - No preamble. Start with the first section heading.`,
+  - No preamble. Start with the first heading.`,
 
   hybrid: `\
 IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
