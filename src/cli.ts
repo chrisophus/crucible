@@ -37,7 +37,10 @@ import { createRequire } from "node:module"
 import { createInterface } from "node:readline"
 
 const require = createRequire(import.meta.url)
-const { version: PURIFY_VERSION } = require("../package.json") as { version: string }
+const { version: PURIFY_VERSION } = require("../package.json") as {
+  version: string
+}
+
 import Anthropic from "@anthropic-ai/sdk"
 import {
   addContextToSession,
@@ -47,15 +50,24 @@ import {
   runTranslatePipeline,
   runUpdatePipeline,
 } from "./core-tools.ts"
-import { APPLY_SUGGESTION_SYSTEM, formatPrimaryWithAuthorContext } from "./prompts.ts"
+import {
+  APPLY_SUGGESTION_SYSTEM,
+  formatPrimaryWithAuthorContext,
+} from "./prompts.ts"
 import {
   callLLM,
   DEFAULT_CHEAP_MODELS,
   DEFAULT_MODELS,
   TO_AISP_SYSTEM_WITH_TOOLS,
 } from "./providers.ts"
-import type { Config, Contradiction, Question } from "./types.ts"
-import type { ContextFile, Mode, Provider } from "./types.ts"
+import type {
+  Config,
+  ContextFile,
+  Contradiction,
+  Mode,
+  Provider,
+  Question,
+} from "./types.ts"
 import { TIER_NAMES } from "./validator.ts"
 
 // ── Error logging ──────────────────────────────────────────────────────────────
@@ -120,18 +132,20 @@ function ensureNoInputFileAndPositionalConflict(
 }
 
 function loadContextFiles(paths: string[]): ContextFile[] {
-  return paths.map((p) => {
+  const files: ContextFile[] = []
+  for (const p of paths) {
     if (!existsSync(p)) {
       process.stderr.write(`error: context file not found: ${p}\n`)
       process.exit(1)
     }
     try {
-      return { path: p, content: readFileSync(p, "utf8") }
+      files.push({ path: p, content: readFileSync(p, "utf8") })
     } catch {
       process.stderr.write(`error: cannot read context file: ${p}\n`)
       process.exit(1)
     }
-  })
+  }
+  return files
 }
 
 function eprint(msg: string, verbose: boolean): void {
@@ -139,7 +153,11 @@ function eprint(msg: string, verbose: boolean): void {
 }
 
 /** Format quality scores as a QUALITY header line. */
-function formatQualityLine(scores: { tau: string; delta: number; phi: number }): string {
+function formatQualityLine(scores: {
+  tau: string
+  delta: number
+  phi: number
+}): string {
   const tierName = TIER_NAMES[scores.tau] ?? "unknown"
   return `QUALITY: ${scores.tau} ${tierName} (δ=${scores.delta.toFixed(2)}, φ=${scores.phi})`
 }
@@ -441,7 +459,12 @@ Other surfaces:
 
 type ReplState =
   | { type: "main" }
-  | { type: "clarify"; questions: Question[]; answers: string[]; sessionId: string }
+  | {
+      type: "clarify"
+      questions: Question[]
+      answers: string[]
+      sessionId: string
+    }
 
 async function runRepl(opts: {
   provider: Provider
@@ -463,7 +486,6 @@ async function runRepl(opts: {
     mainModel,
     purifyModel,
     apiKey,
-    verbose,
     mode,
     fromAisp,
     baseUrl,
@@ -514,7 +536,9 @@ async function runRepl(opts: {
     process.exit(0)
   })
 
-  async function handleResult(result: Awaited<ReturnType<typeof runPurifyPipeline>>): Promise<void> {
+  async function handleResult(
+    result: Awaited<ReturnType<typeof runPurifyPipeline>>,
+  ): Promise<void> {
     if (result.scores) {
       process.stderr.write(`${formatQualityLine(result.scores)}\n`)
     }
@@ -535,12 +559,21 @@ async function runRepl(opts: {
       questions.forEach((q, i) => {
         process.stderr.write(`${i + 1}. [${q.priority}] ${q.question}\n`)
       })
-      process.stderr.write("\nEnter answers (one per line, empty line to submit):\n")
-      state = { type: "clarify", questions, answers: [], sessionId: result.session_id }
+      process.stderr.write(
+        "\nEnter answers (one per line, empty line to submit):\n",
+      )
+      state = {
+        type: "clarify",
+        questions,
+        answers: [],
+        sessionId: result.session_id,
+      }
     } else if (result.status === "has_contradictions") {
       process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
       result.contradictions!.forEach((c: Contradiction, i: number) => {
-        process.stderr.write(`${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`)
+        process.stderr.write(
+          `${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`,
+        )
       })
       process.stderr.write("Address the contradictions and resubmit.\n")
     }
@@ -551,7 +584,13 @@ async function runRepl(opts: {
     try {
       const startContextFiles = [...opts.contextFiles, ...pendingContextFiles]
       pendingContextFiles = []
-      const result = await runPurifyPipeline(initialPrimaryFromFile, startContextFiles, replConfig, llmOpts, fromAisp)
+      const result = await runPurifyPipeline(
+        initialPrimaryFromFile,
+        startContextFiles,
+        replConfig,
+        llmOpts,
+        fromAisp,
+      )
       await handleResult(result)
     } catch (err) {
       logError(err)
@@ -597,7 +636,9 @@ async function runRepl(opts: {
         try {
           fileContent = readFileSync(filePath, "utf8")
         } catch {
-          process.stderr.write(`error: cannot read context file: ${filePath}\n➤ `)
+          process.stderr.write(
+            `error: cannot read context file: ${filePath}\n➤ `,
+          )
           continue
         }
         const contextFile = { path: filePath, content: fileContent }
@@ -606,31 +647,47 @@ async function runRepl(opts: {
         } else {
           pendingContextFiles.push(contextFile)
         }
-        process.stderr.write(`✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `)
+        process.stderr.write(
+          `✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `,
+        )
         continue
       }
 
       // /patch <section text> — patch a specific section using the current session
       if (input.startsWith("/patch\n") || input === "/patch") {
         if (prevSessionId === null) {
-          process.stderr.write("⊘ /patch requires an active session — purify something first\n➤ ")
+          process.stderr.write(
+            "⊘ /patch requires an active session — purify something first\n➤ ",
+          )
           continue
         }
-        const section = input.startsWith("/patch\n") ? input.slice("/patch\n".length).trim() : ""
+        const section = input.startsWith("/patch\n")
+          ? input.slice("/patch\n".length).trim()
+          : ""
         if (!section) {
-          process.stderr.write("usage: /patch\\n<changed section text>\\n(empty line)\n➤ ")
+          process.stderr.write(
+            "usage: /patch\\n<changed section text>\\n(empty line)\n➤ ",
+          )
           continue
         }
         process.stderr.write(`→ patching...\n`)
         try {
-          const result = await runPatchPipeline(prevSessionId, section, undefined, mode, {
-            ...llmOpts,
-            streamTo: process.stdout,
-          })
+          const result = await runPatchPipeline(
+            prevSessionId,
+            section,
+            undefined,
+            mode,
+            {
+              ...llmOpts,
+              streamTo: process.stdout,
+            },
+          )
           if (result.status === "has_contradictions") {
             process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
             result.contradictions!.forEach((c: Contradiction, i: number) => {
-              process.stderr.write(`${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`)
+              process.stderr.write(
+                `${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`,
+              )
             })
             process.stderr.write("Resolve the contradictions and resubmit.\n")
           } else {
@@ -646,13 +703,27 @@ async function runRepl(opts: {
 
       process.stderr.write(`→ purifying...\n`)
       try {
-        let result
+        let result: Awaited<ReturnType<typeof runPurifyPipeline>>
         if (prevSessionId === null) {
-          const startContextFiles = [...opts.contextFiles, ...pendingContextFiles]
+          const startContextFiles = [
+            ...opts.contextFiles,
+            ...pendingContextFiles,
+          ]
           pendingContextFiles = []
-          result = await runPurifyPipeline(input, startContextFiles, replConfig, llmOpts, fromAisp)
+          result = await runPurifyPipeline(
+            input,
+            startContextFiles,
+            replConfig,
+            llmOpts,
+            fromAisp,
+          )
         } else {
-          result = await runUpdatePipeline(prevSessionId, input, replConfig, llmOpts)
+          result = await runUpdatePipeline(
+            prevSessionId,
+            input,
+            replConfig,
+            llmOpts,
+          )
         }
         await handleResult(result)
       } catch (err) {
@@ -718,7 +789,6 @@ async function runSuggest(opts: {
     mainModel,
     purifyModel,
     apiKey,
-    verbose,
     mode,
     fromAisp,
     inputFile,
@@ -760,9 +830,17 @@ async function runSuggest(opts: {
   })
 
   async function doPurify(): Promise<string> {
-    const result = await runPurifyPipeline(currentText, [], batchConfig, llmOpts, fromAisp)
+    const result = await runPurifyPipeline(
+      currentText,
+      [],
+      batchConfig,
+      llmOpts,
+      fromAisp,
+    )
     if (result.scores) {
-      process.stdout.write(`\n── PURIFIED VERSION ──\n${formatQualityLine(result.scores)}\n---\n`)
+      process.stdout.write(
+        `\n── PURIFIED VERSION ──\n${formatQualityLine(result.scores)}\n---\n`,
+      )
     } else {
       process.stdout.write(`\n── PURIFIED VERSION ──\n`)
     }
@@ -799,7 +877,9 @@ async function runSuggest(opts: {
 
     if (input === "/save") {
       if (!inputFile) {
-        process.stderr.write("⊘ no input file to save to — use --input/-f <path> for /save\n")
+        process.stderr.write(
+          "⊘ no input file to save to — use --input/-f <path> for /save\n",
+        )
       } else {
         writeFileSync(inputFile, currentText, "utf8")
         process.stderr.write(`✓ saved to ${inputFile}\n`)
@@ -834,7 +914,9 @@ async function runSuggest(opts: {
         },
       )
 
-      process.stdout.write(`\n── UPDATED ORIGINAL ──\n${currentText}\n── END ORIGINAL ──\n\n`)
+      process.stdout.write(
+        `\n── UPDATED ORIGINAL ──\n${currentText}\n── END ORIGINAL ──\n\n`,
+      )
 
       process.stderr.write(`→ re-purifying...\n`)
       purifiedResult = await doPurify()
@@ -906,7 +988,9 @@ async function main() {
   if (opts.patch) {
     const text = resolvePrimaryText(opts.inputFile, positional)
     if (!text?.trim()) {
-      process.stderr.write("error: --patch requires -f/--input, inline text, or stdin\n")
+      process.stderr.write(
+        "error: --patch requires -f/--input, inline text, or stdin\n",
+      )
       process.exit(1)
     }
     if (!opts.sessionId) {
@@ -914,8 +998,12 @@ async function main() {
       process.exit(1)
     }
     const provider = opts.provider
-    const mainModel = opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
-    const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
+    const mainModel =
+      opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
+    const purifyModel =
+      opts.purifyModel ??
+      process.env.PURIFY_MODEL_CHEAP ??
+      DEFAULT_CHEAP_MODELS[provider]
     const apiKey = resolveApiKey(provider, opts.apiKey)
     const llmOpts = {
       apiKey,
@@ -938,7 +1026,9 @@ async function main() {
       if (result.status === "has_contradictions") {
         process.stderr.write("\nCONTRADICTIONS FOUND\n")
         result.contradictions!.forEach((c, i) => {
-          process.stderr.write(`${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`)
+          process.stderr.write(
+            `${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`,
+          )
         })
         process.exit(1)
       }
@@ -1055,7 +1145,13 @@ async function main() {
   }
 
   try {
-    const result = await runPurifyPipeline(text!, contextFiles, batchConfig, llmOpts, opts.fromAisp)
+    const result = await runPurifyPipeline(
+      text!,
+      contextFiles,
+      batchConfig,
+      llmOpts,
+      opts.fromAisp,
+    )
 
     process.stderr.write(`SESSION: ${result.session_id}\n`)
 
@@ -1063,10 +1159,14 @@ async function main() {
       process.stdout.write(`${formatQualityLine(result.scores)}\n---\n`)
     }
 
-    const { purified } = await runTranslatePipeline(result.session_id, opts.mode, {
-      ...llmOpts,
-      streamTo: process.stdout,
-    })
+    const { purified } = await runTranslatePipeline(
+      result.session_id,
+      opts.mode,
+      {
+        ...llmOpts,
+        streamTo: process.stdout,
+      },
+    )
     process.stdout.write("\n")
 
     if (opts.outputFile) {
