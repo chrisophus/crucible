@@ -10,9 +10,6 @@
 
 import { readFileSync } from "node:fs"
 import {
-  CONTEXT_ACK,
-  CONTRADICTION_DETECTION_SYSTEM,
-  INIT_SYSTEM,
   buildAnswersTurnContent,
   buildContextTurnContent,
   buildPatchRequestContent,
@@ -21,9 +18,16 @@ import {
   buildQuestionRequestContent,
   buildTranslateTurnContent,
   buildUpdateTurnContent,
+  CONTEXT_ACK,
+  CONTRADICTION_DETECTION_SYSTEM,
   getSessionSystemPrompt,
+  INIT_SYSTEM,
 } from "./prompts.ts"
-import { DEFAULT_CHEAP_MODELS, DEFAULT_MODELS, callLLMRepl } from "./providers.ts"
+import {
+  callLLMRepl,
+  DEFAULT_CHEAP_MODELS,
+  DEFAULT_MODELS,
+} from "./providers.ts"
 import { createSession, getSession, saveSession } from "./sessions.ts"
 import type {
   AispBlock,
@@ -121,7 +125,8 @@ function resolveApiKey(provider: Provider): string {
     openai: "OPENAI_API_KEY",
   }
   const key = process.env[envVars[provider]]
-  if (!key) throw new Error(`${envVars[provider]} environment variable is not set`)
+  if (!key)
+    throw new Error(`${envVars[provider]} environment variable is not set`)
   return key
 }
 
@@ -146,11 +151,9 @@ interface ResolvedOpts {
 }
 
 function resolveOpts(opts: LLMOpts): ResolvedOpts {
-  const provider = (
-    opts.provider ??
+  const provider = (opts.provider ??
     (process.env.PURIFY_PROVIDER as Provider | undefined) ??
-    "anthropic"
-  ) as Provider
+    "anthropic") as Provider
   const mainModel =
     opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
   const cheapModel =
@@ -234,7 +237,10 @@ function injectContextTurn(session: Session, files: ContextFile[]): void {
  * Add context files to an existing session as a conversation turn.
  * Use this for mid-session context additions (e.g. REPL /context command).
  */
-export function addContextToSession(sessionId: string, files: ContextFile[]): void {
+export function addContextToSession(
+  sessionId: string,
+  files: ContextFile[],
+): void {
   if (!files.length) return
   const session = getSession(sessionId)
   injectContextTurn(session, files)
@@ -397,7 +403,10 @@ async function runPhase3(
 
   // Contradictions take priority
   if (validation.contradictions.length > 0 && config.ask_on_contradiction) {
-    return { action: "has_contradictions", contradictions: validation.contradictions }
+    return {
+      action: "has_contradictions",
+      contradictions: validation.contradictions,
+    }
   }
 
   // Below threshold — check clarification mode
@@ -469,7 +478,10 @@ export async function runPurifyPipeline(
   if (fromAisp) {
     // Input is already AISP — seed session directly
     session.aisp_current = text
-    session.messages.push({ role: "user", content: text }, { role: "assistant", content: text })
+    session.messages.push(
+      { role: "user", content: text },
+      { role: "assistant", content: text },
+    )
     saveSession(session)
     aisp = text
   } else {
@@ -481,7 +493,11 @@ export async function runPurifyPipeline(
     resolved.provider,
     resolved.apiKey,
     resolved.cheapModel,
-    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
   )
 
   const phase3 = await runPhase3(session, validation, resolved)
@@ -523,7 +539,11 @@ export async function runClarifyPipeline(
     resolved.provider,
     resolved.apiKey,
     resolved.cheapModel,
-    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
   )
 
   const phase3 = await runPhase3(session, validation, resolved)
@@ -589,7 +609,11 @@ export async function runUpdatePipeline(
     newSession.systemPrompt,
     newSession.messages,
     undefined,
-    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
   )
 
   newSession.messages.push({ role: "assistant" as const, content: updatedAisp })
@@ -601,7 +625,11 @@ export async function runUpdatePipeline(
     resolved.provider,
     resolved.apiKey,
     resolved.cheapModel,
-    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
   )
 
   const phase3 = await runPhase3(newSession, validation, resolved)
@@ -624,7 +652,11 @@ export async function runUpdatePipeline(
     }
   }
 
-  return { session_id: newSession.id, status: "ready", scores: validation.scores }
+  return {
+    session_id: newSession.id,
+    status: "ready",
+    scores: validation.scores,
+  }
 }
 
 // ── purify_patch ───────────────────────────────────────────────────────────────
@@ -639,7 +671,9 @@ function parseAispBlocks(raw: string): AispBlock[] {
   // Split on lines starting with -- BLOCK:
   const parts = raw.split(/(?=^--\s*BLOCK:\s*)/m).filter((p) => p.trim())
   for (const part of parts) {
-    const headerMatch = part.match(/^--\s*BLOCK:\s*([^|]+)\|\s*v=(\d+)\s*\|\s*delta=(.+)$/m)
+    const headerMatch = part.match(
+      /^--\s*BLOCK:\s*([^|]+)\|\s*v=(\d+)\s*\|\s*delta=(.+)$/m,
+    )
     if (!headerMatch) continue
     blocks.push({
       name: headerMatch[1].trim(),
@@ -659,7 +693,10 @@ function parseAispBlocks(raw: string): AispBlock[] {
 function spliceAispBlocks(aisp: string, blocks: AispBlock[]): string {
   let result = aisp
   for (const block of blocks) {
-    const markerRe = new RegExp(`--\\s*BLOCK:\\s*${escapeRegex(block.name)}[^\\n]*\\n`, "m")
+    const markerRe = new RegExp(
+      `--\\s*BLOCK:\\s*${escapeRegex(block.name)}[^\\n]*\\n`,
+      "m",
+    )
     const match = markerRe.exec(result)
     if (!match) {
       // Block marker not in AISP — append
@@ -669,7 +706,7 @@ function spliceAispBlocks(aisp: string, blocks: AispBlock[]): string {
       const afterMarker = start + match[0].length
       const nextMatch = /--\s*BLOCK:/m.exec(result.slice(afterMarker))
       const end = nextMatch ? afterMarker + nextMatch.index : result.length
-      result = result.slice(0, start) + block.body + "\n" + result.slice(end)
+      result = `${result.slice(0, start) + block.body}\n${result.slice(end)}`
     }
   }
   return result
@@ -806,7 +843,11 @@ export async function initContext(
     INIT_SYSTEM,
     [{ role: "user", content: userContent }],
     undefined,
-    { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
+    {
+      baseUrl: resolved.baseUrl,
+      openaiUser: resolved.openaiUser,
+      insecure: resolved.insecure,
+    },
   )
 
   try {

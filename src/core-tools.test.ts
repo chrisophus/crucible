@@ -44,7 +44,7 @@ const FAKE_AISP = `DOMAIN≜"test" φ≜95 δ≜0.80 τ≜◊⁺⁺\nREQ≜[R1: 
 
 const HIGH_VALIDATOR_RESULT = {
   valid: true,
-  delta: 0.80,
+  delta: 0.8,
   tier: "◊⁺⁺",
   ambiguity: 0.05,
   pureDensity: 0.85,
@@ -74,26 +74,32 @@ beforeEach(() => {
 
   // Default: Phase1 returns AISP; contradiction detection returns empty;
   // Phase4 returns purified English.
-  mockCallLLM.mockImplementation(async (_provider, _apiKey, _model, _system, messages, streamTo) => {
-    const lastMsg = messages[messages.length - 1]
-    const content = typeof lastMsg.content === "string" ? lastMsg.content : ""
+  mockCallLLM.mockImplementation(
+    async (_provider, _apiKey, _model, _system, messages, streamTo) => {
+      const lastMsg = messages[messages.length - 1]
+      const content = typeof lastMsg.content === "string" ? lastMsg.content : ""
 
-    if (content.includes("contradictions") || content === FAKE_AISP) {
-      // contradiction detection call
-      return JSON.stringify({ contradictions: [] })
-    }
-    if (content.includes("Translate") || content.includes("translate")) {
-      // Phase 4 translate
-      const purified = "The system shall respond."
-      if (streamTo) streamTo.write(purified)
-      return purified
-    }
-    // Phase 1 or update — return AISP
-    return FAKE_AISP
-  })
+      if (content.includes("contradictions") || content === FAKE_AISP) {
+        // contradiction detection call
+        return JSON.stringify({ contradictions: [] })
+      }
+      if (content.includes("Translate") || content.includes("translate")) {
+        // Phase 4 translate
+        const purified = "The system shall respond."
+        if (streamTo) streamTo.write(purified)
+        return purified
+      }
+      // Phase 1 or update — return AISP
+      return FAKE_AISP
+    },
+  )
 
   mockRunValidator.mockResolvedValue(HIGH_VALIDATOR_RESULT)
-  mockParseEvidence.mockReturnValue({ delta: 0.80, tierSymbol: "◊⁺⁺", tierName: "platinum" })
+  mockParseEvidence.mockReturnValue({
+    delta: 0.8,
+    tierSymbol: "◊⁺⁺",
+    tierName: "platinum",
+  })
 })
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
@@ -102,7 +108,7 @@ describe("runPurifyPipeline", () => {
   it('returns status=ready when clarification_mode is "never"', async () => {
     const result = await runPurifyPipeline(
       "The system should respond quickly.",
-      undefined,
+      [],
       NEVER_CONFIG,
       LLM_OPTS,
     )
@@ -115,12 +121,12 @@ describe("runPurifyPipeline", () => {
   it("includes scores in the result", async () => {
     const result = await runPurifyPipeline(
       "The system should respond quickly.",
-      undefined,
+      [],
       NEVER_CONFIG,
       LLM_OPTS,
     )
 
-    expect(result.scores?.delta).toBeCloseTo(0.80)
+    expect(result.scores?.delta).toBeCloseTo(0.8)
     expect(result.scores?.tau).toBeTypeOf("string")
   })
 
@@ -145,7 +151,7 @@ describe("runPurifyPipeline", () => {
 
     const result = await runPurifyPipeline(
       "The system is always on and never on.",
-      undefined,
+      [],
       { ...NEVER_CONFIG, ask_on_contradiction: true },
       LLM_OPTS,
     )
@@ -165,7 +171,9 @@ describe("runPurifyPipeline", () => {
       pureDensity: 0.1,
     })
 
-    const questions = [{ priority: "OPTIONAL", question: "What is the retry limit?" }]
+    const questions = [
+      { priority: "OPTIONAL", question: "What is the retry limit?" },
+    ]
 
     mockCallLLM.mockImplementation(async (_p, _k, _m, _sys, messages) => {
       const lastMsg = messages[messages.length - 1]
@@ -181,7 +189,7 @@ describe("runPurifyPipeline", () => {
 
     const result = await runPurifyPipeline(
       "The system should retry.",
-      undefined,
+      [],
       ON_LOW_SCORE_CONFIG,
       LLM_OPTS,
     )
@@ -195,7 +203,7 @@ describe("runPurifyPipeline", () => {
 
     const result = await runPurifyPipeline(
       FAKE_AISP,
-      undefined,
+      [],
       NEVER_CONFIG,
       LLM_OPTS,
       true, // fromAisp
@@ -210,10 +218,19 @@ describe("runPurifyPipeline", () => {
 
 describe("runTranslatePipeline", () => {
   it("returns purified string", async () => {
-    const run = await runPurifyPipeline("The system shall respond.", undefined, NEVER_CONFIG, LLM_OPTS)
+    const run = await runPurifyPipeline(
+      "The system shall respond.",
+      [],
+      NEVER_CONFIG,
+      LLM_OPTS,
+    )
     expect(run.status).toBe("ready")
 
-    const result = await runTranslatePipeline(run.session_id, "narrative", LLM_OPTS)
+    const result = await runTranslatePipeline(
+      run.session_id,
+      "narrative",
+      LLM_OPTS,
+    )
 
     expect(result.purified).toBeTypeOf("string")
     expect(result.purified.length).toBeGreaterThan(0)
@@ -221,14 +238,25 @@ describe("runTranslatePipeline", () => {
   })
 
   it("passes streamTo to callLLMRepl", async () => {
-    const run = await runPurifyPipeline("The system shall respond.", undefined, NEVER_CONFIG, LLM_OPTS)
+    const run = await runPurifyPipeline(
+      "The system shall respond.",
+      [],
+      NEVER_CONFIG,
+      LLM_OPTS,
+    )
 
     const chunks: string[] = []
     const fakeStream = {
-      write: (chunk: string) => { chunks.push(chunk); return true },
+      write: (chunk: string) => {
+        chunks.push(chunk)
+        return true
+      },
     } as unknown as NodeJS.WritableStream
 
-    await runTranslatePipeline(run.session_id, "narrative", { ...LLM_OPTS, streamTo: fakeStream })
+    await runTranslatePipeline(run.session_id, "narrative", {
+      ...LLM_OPTS,
+      streamTo: fakeStream,
+    })
 
     // Find the Phase4 call — it's the last callLLMRepl call and should have received streamTo
     const allCalls = mockCallLLM.mock.calls
@@ -239,7 +267,12 @@ describe("runTranslatePipeline", () => {
 
 describe("runClarifyPipeline", () => {
   it("returns status=ready after answers are incorporated", async () => {
-    const run = await runPurifyPipeline("The system shall retry.", undefined, NEVER_CONFIG, LLM_OPTS)
+    const run = await runPurifyPipeline(
+      "The system shall retry.",
+      [],
+      NEVER_CONFIG,
+      LLM_OPTS,
+    )
     expect(run.status).toBe("ready")
 
     const clarifyResult = await runClarifyPipeline(
@@ -257,7 +290,12 @@ describe("session expiry", () => {
   it("throws when session has expired", async () => {
     vi.useFakeTimers()
 
-    const run = await runPurifyPipeline("Some spec.", undefined, NEVER_CONFIG, LLM_OPTS)
+    const run = await runPurifyPipeline(
+      "Some spec.",
+      [],
+      NEVER_CONFIG,
+      LLM_OPTS,
+    )
     const { session_id } = run
 
     // Advance time past 30-minute TTL
