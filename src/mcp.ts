@@ -1,4 +1,3 @@
-#!/usr/bin/env tsx
 /**
  * purify MCP server — v3 session-based pipeline
  *
