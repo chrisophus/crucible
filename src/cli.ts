@@ -53,6 +53,7 @@ import {
 import {
   APPLY_SUGGESTION_SYSTEM,
   formatPrimaryWithAuthorContext,
+  MODE_INSTRUCTIONS,
 } from "./prompts.ts"
 import {
   callLLM,
@@ -546,10 +547,14 @@ async function runRepl(opts: {
     if (result.status === "ready") {
       process.stderr.write(`→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
-      const { purified } = await runTranslatePipeline(result.session_id, mode, {
-        ...llmOpts,
-        streamTo: process.stdout,
-      })
+      const { purified } = await runTranslatePipeline(
+        result.session_id,
+        MODE_INSTRUCTIONS[mode],
+        {
+          ...llmOpts,
+          streamTo: process.stdout,
+        },
+      )
       lastAssistantReply = purified
       prevSessionId = result.session_id
       process.stdout.write("\n\n")
@@ -575,10 +580,14 @@ async function runRepl(opts: {
       })
       process.stderr.write(`\n→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
-      const { purified } = await runTranslatePipeline(result.session_id, mode, {
-        ...llmOpts,
-        streamTo: process.stdout,
-      })
+      const { purified } = await runTranslatePipeline(
+        result.session_id,
+        MODE_INSTRUCTIONS[mode],
+        {
+          ...llmOpts,
+          streamTo: process.stdout,
+        },
+      )
       lastAssistantReply = purified
       prevSessionId = result.session_id
       process.stdout.write("\n\n")
@@ -850,10 +859,14 @@ async function runSuggest(opts: {
     } else {
       process.stdout.write(`\n── PURIFIED VERSION ──\n`)
     }
-    const { purified } = await runTranslatePipeline(result.session_id, mode, {
-      ...llmOpts,
-      streamTo: process.stdout,
-    })
+    const { purified } = await runTranslatePipeline(
+      result.session_id,
+      MODE_INSTRUCTIONS[mode],
+      {
+        ...llmOpts,
+        streamTo: process.stdout,
+      },
+    )
     process.stdout.write(`\n── END PURIFIED ──\n\n`)
     return purified
   }
@@ -1167,7 +1180,7 @@ async function main() {
 
     const { purified } = await runTranslatePipeline(
       result.session_id,
-      opts.mode,
+      MODE_INSTRUCTIONS[opts.mode],
       {
         ...llmOpts,
         streamTo: process.stdout,
