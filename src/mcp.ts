@@ -23,7 +23,11 @@
 
 // ── Help ───────────────────────────────────────────────────────────────────────
 
-if (process.argv.includes("--help") || process.argv.includes("-h") || process.stdin.isTTY) {
+if (
+  process.argv.includes("--help") ||
+  process.argv.includes("-h") ||
+  process.stdin.isTTY
+) {
   process.stdout.write(`\
 purify-mcp — purify MCP server (stdio transport)
 
@@ -98,7 +102,8 @@ const TOOLS: Tool[] = [
         },
         config: {
           type: "object",
-          description: "Optional pipeline configuration. Defaults: on_low_score / ◊ / true / 2",
+          description:
+            "Optional pipeline configuration. Defaults: on_low_score / ◊ / true / 2",
           properties: {
             clarification_mode: {
               type: "string",
@@ -112,15 +117,18 @@ const TOOLS: Tool[] = [
             score_threshold: {
               type: "string",
               enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"],
-              description: "Minimum tier to proceed without clarification (default: ◊ silver)",
+              description:
+                "Minimum tier to proceed without clarification (default: ◊ silver)",
             },
             ask_on_contradiction: {
               type: "boolean",
-              description: "If true, return has_contradictions instead of proceeding (default: true)",
+              description:
+                "If true, return has_contradictions instead of proceeding (default: true)",
             },
             max_clarify_rounds: {
               type: "number",
-              description: "Maximum clarification rounds before proceeding (default: 2)",
+              description:
+                "Maximum clarification rounds before proceeding (default: 2)",
             },
           },
         },
@@ -141,7 +149,8 @@ const TOOLS: Tool[] = [
       properties: {
         session_id: {
           type: "string",
-          description: "Session ID from the prior purify_run or purify_clarify call",
+          description:
+            "Session ID from the prior purify_run or purify_clarify call",
         },
         answers: {
           type: "array",
@@ -149,7 +158,10 @@ const TOOLS: Tool[] = [
           items: {
             type: "object",
             properties: {
-              question: { type: "string", description: "The clarifying question" },
+              question: {
+                type: "string",
+                description: "The clarifying question",
+              },
               answer: { type: "string", description: "The author's answer" },
             },
             required: ["question", "answer"],
@@ -171,7 +183,8 @@ const TOOLS: Tool[] = [
       properties: {
         session_id: {
           type: "string",
-          description: "Session ID from the prior purify_run or purify_clarify call",
+          description:
+            "Session ID from the prior purify_run or purify_clarify call",
         },
         format: {
           type: "string",
@@ -207,8 +220,14 @@ const TOOLS: Tool[] = [
           type: "object",
           description: "Optional pipeline configuration for the new session",
           properties: {
-            clarification_mode: { type: "string", enum: ["always", "on_low_score", "never"] },
-            score_threshold: { type: "string", enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"] },
+            clarification_mode: {
+              type: "string",
+              enum: ["always", "on_low_score", "never"],
+            },
+            score_threshold: {
+              type: "string",
+              enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"],
+            },
             ask_on_contradiction: { type: "boolean" },
             max_clarify_rounds: { type: "number" },
           },
@@ -230,19 +249,23 @@ const TOOLS: Tool[] = [
       properties: {
         session_id: {
           type: "string",
-          description: "Session ID from a completed purify_run + purify_translate flow",
+          description:
+            "Session ID from a completed purify_run + purify_translate flow",
         },
         section: {
           type: "string",
-          description: "The changed section of the specification (English text, not a change description)",
+          description:
+            "The changed section of the specification (English text, not a change description)",
         },
         hint: {
           type: "string",
-          description: "Optional: which part of the spec this belongs to (e.g. 'retry rules', 'auth section')",
+          description:
+            "Optional: which part of the spec this belongs to (e.g. 'retry rules', 'auth section')",
         },
         format: {
           type: "string",
-          description: "Output format for the English snippet. Same values as purify_translate.",
+          description:
+            "Output format for the English snippet. Same values as purify_translate.",
           default: "preserve input format",
         },
       },
@@ -261,7 +284,8 @@ const TOOLS: Tool[] = [
       properties: {
         files: {
           type: "array",
-          description: "Absolute or relative paths to project files to extract context from",
+          description:
+            "Absolute or relative paths to project files to extract context from",
           items: { type: "string" },
         },
       },
@@ -284,7 +308,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     if (name === "purify_run") {
-      const { text, context, config: configInput } = args as {
+      const {
+        text,
+        context,
+        config: configInput,
+      } = args as {
         text: string
         context?: string
         config?: Partial<Config>
@@ -299,7 +327,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "No context provided. Run purify_init on your project files once to generate purify.context.md, " +
           "then pass its contents as the context parameter for higher-quality output."
       }
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      }
     }
 
     if (name === "purify_clarify") {
@@ -308,7 +338,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         answers: Array<{ question: string; answer: string }>
       }
       const result = await runClarifyPipeline(session_id, answers, {})
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      }
     }
 
     if (name === "purify_translate") {
@@ -317,35 +349,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         format?: string
       }
       const result = await runTranslatePipeline(session_id, format, {})
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      }
     }
 
     if (name === "purify_update") {
-      const { session_id, change, config: configInput } = args as {
+      const {
+        session_id,
+        change,
+        config: configInput,
+      } = args as {
         session_id: string
         change: string
         config?: Partial<Config>
       }
       const config: Config = { ...DEFAULT_CONFIG, ...configInput }
       const result = await runUpdatePipeline(session_id, change, config, {})
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      }
     }
 
     if (name === "purify_patch") {
-      const { session_id, section, hint, format = "preserve input format" } = args as {
+      const {
+        session_id,
+        section,
+        hint,
+        format = "preserve input format",
+      } = args as {
         session_id: string
         section: string
         hint?: string
         format?: string
       }
-      const result = await runPatchPipeline(session_id, section, hint, format, {})
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      const result = await runPatchPipeline(
+        session_id,
+        section,
+        hint,
+        format,
+        {},
+      )
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      }
     }
 
     if (name === "purify_init") {
       const { files } = args as { files: string[] }
       const result = await initContext(files, {})
-      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      }
     }
 
     return {
