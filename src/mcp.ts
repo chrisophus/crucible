@@ -22,6 +22,38 @@
  *   }
  */
 
+// ── Help ───────────────────────────────────────────────────────────────────────
+
+if (process.argv.includes("--help") || process.argv.includes("-h") || process.stdin.isTTY) {
+  process.stdout.write(`\
+purify-mcp — purify MCP server (stdio transport)
+
+This command is meant to be invoked by an MCP client, not run directly.
+
+Configure it in your MCP client:
+
+  Claude Code (~/.claude/settings.json):
+    {
+      "mcpServers": {
+        "purify": {
+          "command": "purify-mcp",
+          "env": { "ANTHROPIC_API_KEY": "sk-ant-..." }
+        }
+      }
+    }
+
+  Claude Desktop (~/.claude/claude_desktop_config.json):
+    same format as above
+
+Tools exposed: purify_run, purify_clarify, purify_translate, purify_update, purify_init
+
+Environment:
+  ANTHROPIC_API_KEY    OPENAI_API_KEY
+  PURIFY_PROVIDER      PURIFY_MODEL    PURIFY_MODEL_CHEAP
+`)
+  process.exit(0)
+}
+
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
