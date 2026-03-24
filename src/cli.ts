@@ -43,6 +43,7 @@ const { version: PURIFY_VERSION } = require("../package.json") as { version: str
 import Anthropic from "@anthropic-ai/sdk"
 import {
   runClarifyPipeline,
+  runPatchPipeline,
   runPurifyPipeline,
   runTranslatePipeline,
   runUpdatePipeline,
@@ -242,6 +243,9 @@ function parseArgs(argv: string[]) {
     suggest: false,
     thinking: false,
     estimate: false,
+    patch: false,
+    sessionId: null as string | null,
+    patchHint: null as string | null,
     help: false,
     version: false,
     inputFile: null as string | null,
@@ -291,6 +295,12 @@ function parseArgs(argv: string[]) {
       opts.thinking = true
     } else if (a === "--estimate") {
       opts.estimate = true
+    } else if (a === "--patch") {
+      opts.patch = true
+    } else if (a === "--session") {
+      opts.sessionId = args[++i]
+    } else if (a === "--hint") {
+      opts.patchHint = args[++i]
     } else if (a === "--provider") {
       opts.provider = args[++i] as Provider
     } else if (a === "--model") {
@@ -384,6 +394,9 @@ Options:
   --base-url     OpenAI-compatible base URL                  (default: OPENAI_BASE_URL)
   --user         OpenAI user identifier for tracking         (default: OPENAI_USER)
   --insecure     disable TLS certificate verification        (default: OPENAI_INSECURE=1)
+  --patch        patch a section of an existing session (requires --session)
+  --session      session ID to patch (printed to stderr after each batch run)
+  --hint         optional hint for --patch: which part of the spec the section belongs to
   --from-aisp    skip step 1 — input is already AISP
   --thinking     enable extended thinking for Step 3 (Anthropic Sonnet/Opus only)
   --estimate     count input tokens for Step 1 and exit without calling the main model
@@ -421,6 +434,11 @@ Examples:
   purify -f spec.md --feedback "focus on the auth section"
   purify -f spec.md --verbose 2>aisp_debug.md
   purify "add a status field" -c style-guide.md -c api-types.ts
+
+Patch workflow (large specs):
+  SESSION=$(purify -f spec.md 2>&1 >/dev/null | grep SESSION | cut -d' ' -f2)
+  purify --patch -f changed-section.md --session $SESSION
+  purify --patch "retry up to 5 times" --session $SESSION --hint "retry rules"
 
 Other surfaces:
   purify-mcp     MCP server (stdio) — use with Claude Code / Claude Desktop
@@ -489,6 +507,7 @@ async function runRepl(opts: {
 
   process.stderr.write(
     `purify repl — empty line to submit, /exit or ctrl-c to quit\n` +
+      `commands: /context <path>  /patch\\n<section text>  /exit\n` +
       `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n` +
       (opts.contextFiles.length > 0
         ? `context: ${opts.contextFiles.length} file(s): ${opts.contextFiles.map((f) => f.path).join(", ")}\n`
@@ -589,6 +608,40 @@ async function runRepl(opts: {
         const newChunk = `## ${filePath}\n\n${fileContent}`
         context = context ? `${context}\n\n---\n\n${newChunk}` : newChunk
         process.stderr.write(`✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `)
+        continue
+      }
+
+      // /patch <section text> — patch a specific section using the current session
+      if (input.startsWith("/patch\n") || input === "/patch") {
+        if (prevSessionId === null) {
+          process.stderr.write("⊘ /patch requires an active session — purify something first\n➤ ")
+          continue
+        }
+        const section = input.startsWith("/patch\n") ? input.slice("/patch\n".length).trim() : ""
+        if (!section) {
+          process.stderr.write("usage: /patch\\n<changed section text>\\n(empty line)\n➤ ")
+          continue
+        }
+        process.stderr.write(`→ patching...\n`)
+        try {
+          const result = await runPatchPipeline(prevSessionId, section, undefined, mode, {
+            ...llmOpts,
+            streamTo: process.stdout,
+          })
+          if (result.status === "has_contradictions") {
+            process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
+            result.contradictions!.forEach((c: Contradiction, i: number) => {
+              process.stderr.write(`${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`)
+            })
+            process.stderr.write("Resolve the contradictions and resubmit.\n")
+          } else {
+            process.stdout.write("\n\n")
+            lastAssistantReply = result.purified_section ?? null
+          }
+        } catch (err) {
+          logError(err)
+        }
+        process.stderr.write("➤ ")
         continue
       }
 
@@ -847,6 +900,55 @@ async function main() {
     process.exit(0)
   }
 
+  if (opts.patch) {
+    const text = resolvePrimaryText(opts.inputFile, positional)
+    if (!text?.trim()) {
+      process.stderr.write("error: --patch requires -f/--input, inline text, or stdin\n")
+      process.exit(1)
+    }
+    if (!opts.sessionId) {
+      process.stderr.write("error: --patch requires --session <session_id>\n")
+      process.exit(1)
+    }
+    const provider = opts.provider
+    const mainModel = opts.model ?? process.env.PURIFY_MODEL ?? DEFAULT_MODELS[provider]
+    const purifyModel = opts.purifyModel ?? process.env.PURIFY_MODEL_CHEAP ?? DEFAULT_CHEAP_MODELS[provider]
+    const apiKey = resolveApiKey(provider, opts.apiKey)
+    const llmOpts = {
+      apiKey,
+      provider,
+      model: mainModel,
+      cheapModel: purifyModel,
+      baseUrl: opts.baseUrl ?? undefined,
+      openaiUser: opts.openaiUser ?? undefined,
+      insecure: opts.insecure,
+    }
+    try {
+      const result = await runPatchPipeline(
+        opts.sessionId,
+        text!,
+        opts.patchHint ?? undefined,
+        opts.mode,
+        { ...llmOpts, streamTo: process.stdout },
+      )
+      process.stdout.write("\n")
+      if (result.status === "has_contradictions") {
+        process.stderr.write("\nCONTRADICTIONS FOUND\n")
+        result.contradictions!.forEach((c, i) => {
+          process.stderr.write(`${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`)
+        })
+        process.exit(1)
+      }
+      if (opts.outputFile && result.purified_section) {
+        writeFileSync(opts.outputFile, result.purified_section, "utf8")
+      }
+    } catch (err) {
+      logError(err)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
+
   if (opts.suggest) {
     ensureNoInputFileAndPositionalConflict(opts.inputFile, positional)
     const text = resolvePrimaryText(opts.inputFile, positional)
@@ -952,6 +1054,8 @@ async function main() {
 
   try {
     const result = await runPurifyPipeline(text!, context, batchConfig, llmOpts, opts.fromAisp)
+
+    process.stderr.write(`SESSION: ${result.session_id}\n`)
 
     if (result.scores) {
       process.stdout.write(`${formatQualityLine(result.scores)}\n---\n`)

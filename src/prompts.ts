@@ -459,3 +459,33 @@ export function buildUpdateTurnContent(change: string): string {
     `Output only the updated AISP document.\n\nCHANGE:\n${change}`
   )
 }
+
+// PatchRequest content: changed section + optional hint
+// The full AISP is in the system prompt (cached); this is the user turn.
+export function buildPatchRequestContent(section: string, hint?: string): string {
+  const hintLine = hint ? `\nHINT (which part of the spec this belongs to): ${hint}` : ""
+  return (
+    `The following section of the specification has changed.${hintLine}\n\n` +
+    `Return only the AISP blocks that need to be updated. ` +
+    `Prefix each block with a comment line in this exact format:\n` +
+    `-- BLOCK: <name> | v=<N+1> | delta=<brief description of what changed>\n\n` +
+    `Where <name> is the block identifier from the existing AISP, ` +
+    `<N+1> increments the existing version number (use 1 if none exists), ` +
+    `and delta briefly describes what changed.\n\n` +
+    `Output only the changed blocks, nothing else.\n\n` +
+    `CHANGED SECTION:\n${section}`
+  )
+}
+
+// PatchTranslate content: translate only the changed blocks (full AISP is in system prompt)
+export function buildPatchTranslateContent(patchRaw: string, format: string): string {
+  return (
+    `The following AISP blocks were updated. ` +
+    `Translate only these blocks to natural language.\n\n` +
+    `Use the full AISP document (in the system prompt) to resolve any cross-references.\n\n` +
+    `${format}\n\n` +
+    `No hedge words (typically, usually, often, generally). ` +
+    `No preamble. Output only the English translation of the changed blocks.\n\n` +
+    `CHANGED BLOCKS:\n${patchRaw}`
+  )
+}

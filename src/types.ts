@@ -109,6 +109,21 @@ export interface PurifyRunResult {
   scores?: Scores
 }
 
+export interface AispBlock {
+  name: string
+  version: number
+  delta: string
+  body: string // includes the -- BLOCK: comment line
+}
+
+export interface PatchResult {
+  session_id: string
+  status: "ready" | "has_contradictions"
+  aisp_patch?: AispBlock[]
+  purified_section?: string
+  contradictions?: Contradiction[]
+}
+
 // ── Legacy types used by CLI pipeline ─────────────────────────────────────────
 
 export type ClarificationPriority = "REQUIRED" | "OPTIONAL"

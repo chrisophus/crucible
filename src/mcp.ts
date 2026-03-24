@@ -45,7 +45,7 @@ Configure it in your MCP client:
   Claude Desktop (~/.claude/claude_desktop_config.json):
     same format as above
 
-Tools exposed: purify_run, purify_clarify, purify_translate, purify_update, purify_init
+Tools exposed: purify_run, purify_clarify, purify_translate, purify_update, purify_patch, purify_init
 
 Environment:
   ANTHROPIC_API_KEY    OPENAI_API_KEY
@@ -65,6 +65,7 @@ import {
 import {
   initContext,
   runClarifyPipeline,
+  runPatchPipeline,
   runPurifyPipeline,
   runTranslatePipeline,
   runUpdatePipeline,
@@ -222,6 +223,38 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "purify_patch",
+    description:
+      "Patch a section of an existing purified spec without re-running the full pipeline. " +
+      "Requires an existing session with aisp_current (i.e., purify_run + purify_translate already completed). " +
+      "Sends only the changed section as new tokens; the full AISP is in the system prompt and is prompt-cached. " +
+      "Returns a section-level English snippet and the AISP blocks that changed — not the full document. " +
+      "Use this instead of purify_update when only a portion of a large spec has changed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        session_id: {
+          type: "string",
+          description: "Session ID from a completed purify_run + purify_translate flow",
+        },
+        section: {
+          type: "string",
+          description: "The changed section of the specification (English text, not a change description)",
+        },
+        hint: {
+          type: "string",
+          description: "Optional: which part of the spec this belongs to (e.g. 'retry rules', 'auth section')",
+        },
+        format: {
+          type: "string",
+          description: "Output format for the English snippet. Same values as purify_translate.",
+          default: "preserve input format",
+        },
+      },
+      required: ["session_id", "section"],
+    },
+  },
+  {
     name: "purify_init",
     description:
       "Setup (once per project). Reads existing project files (specs, schemas, docs, AISP files) " +
@@ -298,6 +331,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const config: Config = { ...DEFAULT_CONFIG, ...configInput }
       const result = await runUpdatePipeline(session_id, change, context, config, {})
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
+    }
+
+    if (name === "purify_patch") {
+      const { session_id, section, hint, format = "preserve input format" } = args as {
+        session_id: string
+        section: string
+        hint?: string
+        format?: string
+      }
+      const result = await runPatchPipeline(session_id, section, hint, format, {})
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
     }
 

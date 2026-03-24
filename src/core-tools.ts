@@ -13,6 +13,8 @@ import {
   CONTRADICTION_DETECTION_SYSTEM,
   INIT_SYSTEM,
   buildAnswersTurnContent,
+  buildPatchRequestContent,
+  buildPatchTranslateContent,
   buildPurifyTurnContent,
   buildQuestionRequestContent,
   buildTranslateTurnContent,
@@ -22,9 +24,11 @@ import {
 import { DEFAULT_CHEAP_MODELS, DEFAULT_MODELS, callLLMRepl } from "./providers.ts"
 import { createSession, getSession, saveSession } from "./sessions.ts"
 import type {
+  AispBlock,
   Config,
   Contradiction,
   Gap,
+  PatchResult,
   PipelineValidationResult,
   Provider,
   PurifyRunResult,
@@ -599,6 +603,145 @@ export async function runUpdatePipeline(
   }
 
   return { session_id: newSession.id, status: "ready", scores: validation.scores }
+}
+
+// ── purify_patch ───────────────────────────────────────────────────────────────
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/** Parse `-- BLOCK: name | v=N | delta=...` markers from a patch LLM response. */
+function parseAispBlocks(raw: string): AispBlock[] {
+  const blocks: AispBlock[] = []
+  // Split on lines starting with -- BLOCK:
+  const parts = raw.split(/(?=^--\s*BLOCK:\s*)/m).filter((p) => p.trim())
+  for (const part of parts) {
+    const headerMatch = part.match(/^--\s*BLOCK:\s*([^|]+)\|\s*v=(\d+)\s*\|\s*delta=(.+)$/m)
+    if (!headerMatch) continue
+    blocks.push({
+      name: headerMatch[1].trim(),
+      version: parseInt(headerMatch[2], 10),
+      delta: headerMatch[3].trim(),
+      body: part.trim(),
+    })
+  }
+  return blocks
+}
+
+/**
+ * Splice updated blocks back into the full AISP by finding the matching
+ * `-- BLOCK: name` marker and replacing from there to the next block marker.
+ * Falls back to appending if the marker is not found.
+ */
+function spliceAispBlocks(aisp: string, blocks: AispBlock[]): string {
+  let result = aisp
+  for (const block of blocks) {
+    const markerRe = new RegExp(`--\\s*BLOCK:\\s*${escapeRegex(block.name)}[^\\n]*\\n`, "m")
+    const match = markerRe.exec(result)
+    if (!match) {
+      // Block marker not in AISP — append
+      result = `${result}\n\n${block.body}`
+    } else {
+      const start = match.index
+      const afterMarker = start + match[0].length
+      const nextMatch = /--\s*BLOCK:/m.exec(result.slice(afterMarker))
+      const end = nextMatch ? afterMarker + nextMatch.index : result.length
+      result = result.slice(0, start) + block.body + "\n" + result.slice(end)
+    }
+  }
+  return result
+}
+
+/**
+ * purify_patch — section-level patch for an existing session.
+ *
+ * Puts the full AISP in the system prompt (prompt-cached) and sends only
+ * the changed section as new tokens. Returns a section-level English snippet,
+ * not the full document. Updates session.aisp_current after a successful patch.
+ */
+export async function runPatchPipeline(
+  sessionId: string,
+  section: string,
+  hint: string | undefined,
+  format: string,
+  opts: LLMOpts & { streamTo?: NodeJS.WritableStream },
+): Promise<PatchResult> {
+  const session = getSession(sessionId)
+  if (!session.aisp_current) {
+    throw new Error("Session has no AISP — call purify_run first")
+  }
+  const resolved = resolveOpts(opts)
+  const llmCallOpts = {
+    baseUrl: resolved.baseUrl,
+    openaiUser: resolved.openaiUser,
+    insecure: resolved.insecure,
+  }
+
+  // Phase 1: Generate patch (cheapModel)
+  // Full AISP lives in the system prompt → Anthropic caches it across calls
+  const patchSystemPrompt = `${session.systemPrompt}\n\n## CURRENT AISP\n\n${session.aisp_current}`
+  const patchRaw = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.cheapModel,
+    patchSystemPrompt,
+    [{ role: "user", content: buildPatchRequestContent(section, hint) }],
+    undefined,
+    llmCallOpts,
+  )
+
+  const blocks = parseAispBlocks(patchRaw)
+  if (blocks.length === 0) {
+    throw new Error(
+      "No AISP blocks found in patch response — use purify_update for full rewrites",
+    )
+  }
+
+  // Phase 2: Splice (no LLM)
+  const updatedAisp = spliceAispBlocks(session.aisp_current, blocks)
+
+  // Phase 3: Contradiction detection on full updated AISP
+  const contradictions = await detectContradictions(
+    updatedAisp,
+    resolved.provider,
+    resolved.apiKey,
+    resolved.cheapModel,
+    llmCallOpts,
+  )
+
+  if (contradictions.length > 0) {
+    return {
+      session_id: session.id,
+      status: "has_contradictions",
+      aisp_patch: blocks,
+      contradictions,
+    }
+  }
+
+  // Phase 4: Translate only the patch (mainModel)
+  // Updated AISP in system prompt → also cached
+  const translateSystemPrompt = `${session.systemPrompt}\n\n## UPDATED AISP\n\n${updatedAisp}`
+  const purifiedSection = await callLLMRepl(
+    resolved.provider,
+    resolved.apiKey,
+    resolved.mainModel,
+    translateSystemPrompt,
+    [{ role: "user", content: buildPatchTranslateContent(patchRaw, format) }],
+    opts.streamTo,
+    llmCallOpts,
+  )
+
+  // Persist updated AISP in session for subsequent patches
+  session.aisp_current = updatedAisp
+  saveSession(session)
+
+  return {
+    session_id: session.id,
+    status: "ready",
+    aisp_patch: blocks,
+    purified_section: purifiedSection,
+  }
 }
 
 // ── purify_init ────────────────────────────────────────────────────────────────
