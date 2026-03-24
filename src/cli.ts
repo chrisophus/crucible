@@ -569,13 +569,19 @@ async function runRepl(opts: {
         sessionId: result.session_id,
       }
     } else if (result.status === "has_contradictions") {
-      process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
+      process.stderr.write("\n⚠ contradictions detected:\n")
       result.contradictions!.forEach((c: Contradiction, i: number) => {
-        process.stderr.write(
-          `${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`,
-        )
+        process.stderr.write(`${i + 1}. [${c.kind}] ${c.question}\n`)
       })
-      process.stderr.write("Address the contradictions and resubmit.\n")
+      process.stderr.write(`\n→ translating (${mainModel})...\n`)
+      process.stdout.write("\n")
+      const { purified } = await runTranslatePipeline(result.session_id, mode, {
+        ...llmOpts,
+        streamTo: process.stdout,
+      })
+      lastAssistantReply = purified
+      prevSessionId = result.session_id
+      process.stdout.write("\n\n")
     }
   }
 
