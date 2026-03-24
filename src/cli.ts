@@ -1,5 +1,3 @@
-#!/usr/bin/env tsx
-
 /**
  * purify — AISP round-trip spec purification
  *
