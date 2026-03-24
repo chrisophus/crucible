@@ -91,7 +91,7 @@ The server is stateful within a session and stateless across sessions.
 ```
 Session ≜ ⟨
   id          : UUID,
-  systemPrompt: string,       -- domain context + AISP spec; cached
+  systemPrompt: string,       -- AISP spec only; stable and cached for session lifetime
   messages    : ConvMessage[], -- user/assistant turns only; append-only
   config      : Config,
   aisp_current: AISPDoc?,
@@ -124,7 +124,9 @@ DefaultConfig ≜ ⟨"on_low_score", ◊, true, 2⟩
 
 ```
 [
-  SystemPrompt,           -- AISP spec + domain context; cached for session
+  SystemPrompt,           -- AISP spec only; cached for session lifetime
+  (ContextTurn,           -- user: FILE_CONTEXT blocks (one per context file)
+   ContextAckTurn,)*      -- assistant: acknowledgement; injected at session start or on /context
   PurifyTurn,             -- user: "Translate to AISP...\n\n<raw text>"
   AISPTurn,               -- assistant: AISP v1
   (QuestionRequestTurn,   -- user: validation summary + question instruction
@@ -138,7 +140,7 @@ DefaultConfig ≜ ⟨"on_low_score", ◊, true, 2⟩
 
 ### Prompt caching
 
-The system prompt (domain context + AISP spec) is sent with `cache_control: ephemeral` on every call. Subsequent user/assistant turns are appended incrementally, so token cost grows only by the new turn.
+The system prompt (AISP spec only) is sent with `cache_control: ephemeral` on every call and never changes within a session. Domain context is injected as explicit conversation turns, not the system prompt. Subsequent user/assistant turns are appended incrementally, so token cost grows only by the new turn.
 
 ---
 
@@ -200,7 +202,6 @@ Starts a new session seeded from a previous session's conversation. Appends the 
 |-------|------|----------|-------------|
 | `session_id` | UUID | ✓ | Previous completed session to seed from |
 | `change` | string | ✓ | Natural language description of the change |
-| `context` | string | — | Updated domain context |
 | `config` | Config | — | Pipeline config for the new session |
 
 Output: same as `purify_run` (new `session_id`). Follow the same clarify/translate flow.
@@ -250,7 +251,7 @@ Step 6: use purified as the working document
 
 ```
 Step 1: Load purify.context.md (proceed without if absent)
-Step 2: purify_update({session_id, change, context}) → result
+Step 2: purify_update({session_id, change}) → result
 Step 3: Handle same as Workflow Steps 3–6
 ```
 
@@ -477,7 +478,7 @@ An interactive session with accumulated conversation history and prompt caching.
 - **Purification:** For every prompt *p*, ambiguity(purify(*p*)) < ambiguity(*p*).
 - **External validator authority:** Validator δ takes precedence over self-reported δ. LLM scores are never trusted.
 - **Conversation accumulation:** Turns append; never replaced within a session.
-- **Prompt caching:** System prompt is a cache hit on every call after the first in a session.
+- **Prompt caching:** System prompt (AISP spec only) is a cache hit on every call after the first in a session. Domain context lives in conversation turns, not the system prompt.
 - **Session statefulness:** Server is stateful within a session, stateless across sessions.
 - **Session expiry:** Sessions expire after 30 minutes of inactivity.
 - **Phase 4 context:** Translate uses the full accumulated conversation as context.
