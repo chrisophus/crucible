@@ -119,6 +119,7 @@ function resolveApiKey(provider: Provider): string {
 }
 
 interface LLMOpts {
+  apiKey?: string
   provider?: Provider
   model?: string
   cheapModel?: string
@@ -149,7 +150,7 @@ function resolveOpts(opts: LLMOpts): ResolvedOpts {
     opts.cheapModel ??
     process.env.PURIFY_MODEL_CHEAP ??
     DEFAULT_CHEAP_MODELS[provider]
-  const apiKey = resolveApiKey(provider)
+  const apiKey = opts.apiKey ?? resolveApiKey(provider)
   return {
     provider,
     mainModel,
@@ -395,6 +396,7 @@ async function runPhase4(
   session: Session,
   format: string,
   resolved: ResolvedOpts,
+  streamTo?: NodeJS.WritableStream,
 ): Promise<string> {
   const userContent = buildTranslateTurnContent(format)
   session.messages.push({ role: "user", content: userContent })
@@ -405,7 +407,7 @@ async function runPhase4(
     resolved.mainModel,
     session.systemPrompt,
     session.messages,
-    undefined,
+    streamTo,
     {
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
@@ -426,12 +428,22 @@ export async function runPurifyPipeline(
   context: string | undefined,
   config: Config,
   opts: LLMOpts,
+  fromAisp = false,
 ): Promise<PurifyRunResult> {
   const resolved = resolveOpts(opts)
   const systemPrompt = getSessionSystemPrompt(context)
   const session = createSession(systemPrompt, config)
 
-  const aisp = await runPhase1(session, text, resolved)
+  let aisp: string
+  if (fromAisp) {
+    // Input is already AISP — seed session directly
+    session.aisp_current = text
+    session.messages.push({ role: "user", content: text }, { role: "assistant", content: text })
+    saveSession(session)
+    aisp = text
+  } else {
+    aisp = await runPhase1(session, text, resolved)
+  }
 
   const validation = await computeValidationResult(
     aisp,
@@ -448,6 +460,7 @@ export async function runPurifyPipeline(
       session_id: session.id,
       status: "has_contradictions",
       contradictions: phase3.contradictions,
+      scores: validation.scores,
     }
   }
 
@@ -456,10 +469,11 @@ export async function runPurifyPipeline(
       session_id: session.id,
       status: "needs_clarification",
       questions: phase3.questions,
+      scores: validation.scores,
     }
   }
 
-  return { session_id: session.id, status: "ready" }
+  return { session_id: session.id, status: "ready", scores: validation.scores }
 }
 
 // purify_clarify — submits answers, re-runs Phase2→Phase3
@@ -488,6 +502,7 @@ export async function runClarifyPipeline(
       session_id: session.id,
       status: "has_contradictions",
       contradictions: phase3.contradictions,
+      scores: validation.scores,
     }
   }
 
@@ -496,22 +511,23 @@ export async function runClarifyPipeline(
       session_id: session.id,
       status: "needs_clarification",
       questions: phase3.questions,
+      scores: validation.scores,
     }
   }
 
-  return { session_id: session.id, status: "ready" }
+  return { session_id: session.id, status: "ready", scores: validation.scores }
 }
 
 // purify_translate — runs Phase4, returns purified English
 export async function runTranslatePipeline(
   sessionId: string,
   format: string,
-  opts: LLMOpts,
+  opts: LLMOpts & { streamTo?: NodeJS.WritableStream },
 ): Promise<{ purified: string; session_id: string }> {
   const session = getSession(sessionId)
   const resolved = resolveOpts(opts)
 
-  const purified = await runPhase4(session, format, resolved)
+  const purified = await runPhase4(session, format, resolved, opts.streamTo)
 
   return { purified, session_id: session.id }
 }
@@ -569,6 +585,7 @@ export async function runUpdatePipeline(
       session_id: newSession.id,
       status: "has_contradictions",
       contradictions: phase3.contradictions,
+      scores: validation.scores,
     }
   }
 
@@ -577,10 +594,11 @@ export async function runUpdatePipeline(
       session_id: newSession.id,
       status: "needs_clarification",
       questions: phase3.questions,
+      scores: validation.scores,
     }
   }
 
-  return { session_id: newSession.id, status: "ready" }
+  return { session_id: newSession.id, status: "ready", scores: validation.scores }
 }
 
 // ── purify_init ────────────────────────────────────────────────────────────────

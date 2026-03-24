@@ -41,24 +41,22 @@ import { createInterface } from "node:readline"
 const require = createRequire(import.meta.url)
 const { version: PURIFY_VERSION } = require("../package.json") as { version: string }
 import Anthropic from "@anthropic-ai/sdk"
-import { eprint, purify } from "./core.ts"
 import {
-  APPLY_SUGGESTION_SYSTEM,
-  formatPrimaryWithAuthorContext,
-  formatReplSystemWithContext,
-  getReplSystem,
-  TO_AISP_SYSTEM,
-} from "./prompts.ts"
+  runClarifyPipeline,
+  runPurifyPipeline,
+  runTranslatePipeline,
+  runUpdatePipeline,
+} from "./core-tools.ts"
+import { APPLY_SUGGESTION_SYSTEM, formatPrimaryWithAuthorContext } from "./prompts.ts"
 import {
   callLLM,
-  callLLMRepl,
-  callLLMWithTools,
   DEFAULT_CHEAP_MODELS,
   DEFAULT_MODELS,
   TO_AISP_SYSTEM_WITH_TOOLS,
 } from "./providers.ts"
-import type { ContextFile, ConvMessage, Mode, Provider } from "./types.ts"
-import { parseEvidence, runValidator, TIER_NAMES } from "./validator.ts"
+import type { Config, Contradiction, Question } from "./types.ts"
+import type { ContextFile, Mode, Provider } from "./types.ts"
+import { TIER_NAMES } from "./validator.ts"
 
 // ── Error logging ──────────────────────────────────────────────────────────────
 
@@ -136,27 +134,20 @@ function loadContextFiles(paths: string[]): ContextFile[] {
   })
 }
 
-async function formatReplQualityLine(aisp: string): Promise<string> {
-  const vr = await runValidator(aisp)
-  const self = parseEvidence(aisp)
-  const delta = vr?.delta ?? self.delta
-  const tierSym =
-    delta === null
-      ? "⊘"
-      : delta >= 0.75
-        ? "◊⁺⁺"
-        : delta >= 0.6
-          ? "◊⁺"
-          : delta >= 0.4
-            ? "◊"
-            : delta >= 0.2
-              ? "◊⁻"
-              : "⊘"
-  const tierName = TIER_NAMES[tierSym] ?? "unknown"
-  const deltaStr = delta !== null ? `δ=${delta.toFixed(2)}` : "δ=?"
-  const selfStr =
-    self.delta !== null ? `, self_δ=${self.delta.toFixed(2)}` : ""
-  return `QUALITY: ${tierSym} ${tierName} (${deltaStr}${selfStr})`
+function eprint(msg: string, verbose: boolean): void {
+  if (verbose) process.stderr.write(`${msg}\n`)
+}
+
+/** Convert loaded context files to a single context string for the session system prompt. */
+function contextFilesToString(files: ContextFile[]): string | undefined {
+  if (!files.length) return undefined
+  return files.map((f) => `## ${f.path}\n\n${f.content}`).join("\n\n---\n\n")
+}
+
+/** Format quality scores as a QUALITY header line. */
+function formatQualityLine(scores: { tau: string; delta: number; phi: number }): string {
+  const tierName = TIER_NAMES[scores.tau] ?? "unknown"
+  return `QUALITY: ${scores.tau} ${tierName} (δ=${scores.delta.toFixed(2)}, φ=${scores.phi})`
 }
 
 function resolveApiKey(provider: Provider, explicit: string | null): string {
@@ -437,6 +428,10 @@ Other surfaces:
 `)
 }
 
+type ReplState =
+  | { type: "main" }
+  | { type: "clarify"; questions: Question[]; answers: string[]; sessionId: string }
+
 async function runRepl(opts: {
   provider: Provider
   mainModel: string
@@ -448,11 +443,8 @@ async function runRepl(opts: {
   baseUrl: string | null
   openaiUser: string | null
   insecure: boolean
-  /** File contents when --repl and -f both set; one automatic first turn (I4). */
   initialPrimaryFromFile: string | null
   outputFile: string | null
-  /** --feedback applies to the first turn only (same as batch one-shot). */
-  authorContextFirstTurn: string | null
   contextFiles: ContextFile[]
 }): Promise<void> {
   const {
@@ -468,19 +460,38 @@ async function runRepl(opts: {
     insecure,
     initialPrimaryFromFile,
     outputFile,
-    authorContextFirstTurn,
   } = opts
-  let contextFiles = opts.contextFiles
-  const messages: ConvMessage[] = []
+
+  const llmOpts = {
+    apiKey,
+    provider,
+    model: mainModel,
+    cheapModel: purifyModel,
+    baseUrl: baseUrl ?? undefined,
+    openaiUser: openaiUser ?? undefined,
+    insecure,
+  }
+
+  const replConfig: Config = {
+    clarification_mode: "on_low_score",
+    ask_on_contradiction: true,
+    max_clarify_rounds: 2,
+    score_threshold: "◊",
+  }
+
+  let context = contextFilesToString(opts.contextFiles)
+  let prevSessionId: string | null = null
   let lastAssistantReply: string | null = null
+  let state: ReplState = { type: "main" }
+  let buffer: string[] = []
 
   const rl = createInterface({ input: process.stdin })
 
   process.stderr.write(
     `purify repl — empty line to submit, /exit or ctrl-c to quit\n` +
       `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n` +
-      (contextFiles.length > 0
-        ? `context: ${contextFiles.length} file(s): ${contextFiles.map((f) => f.path).join(", ")}\n`
+      (opts.contextFiles.length > 0
+        ? `context: ${opts.contextFiles.length} file(s): ${opts.contextFiles.map((f) => f.path).join(", ")}\n`
         : "") +
       "\n",
   )
@@ -491,146 +502,137 @@ async function runRepl(opts: {
     process.exit(0)
   })
 
-  async function runOneTurn(
-    input: string,
-    authorContext: string | null,
-  ): Promise<void> {
-    try {
-      let aisp = input
-      if (!fromAisp) {
-        process.stderr.write(`→ purifying (${purifyModel})...\n`)
-        const step1User = formatPrimaryWithAuthorContext({
-          primary: input,
-          authorContext,
-          phase: "en_to_aisp",
-          contextFiles,
-        })
-        aisp =
-          provider === "anthropic"
-            ? await callLLMWithTools(apiKey, purifyModel, step1User)
-            : await callLLM(
-                provider,
-                apiKey,
-                purifyModel,
-                TO_AISP_SYSTEM,
-                step1User,
-                {
-                  baseUrl: baseUrl ?? undefined,
-                  openaiUser: openaiUser ?? undefined,
-                  insecure,
-                },
-              )
-      }
+  async function handleResult(result: Awaited<ReturnType<typeof runPurifyPipeline>>): Promise<void> {
+    if (result.scores) {
+      process.stderr.write(`${formatQualityLine(result.scores)}\n`)
+    }
 
-      if (verbose) {
-        process.stderr.write(`\n── AISP ──\n${aisp}\n──────────\n\n`)
-      }
-
-      const qualityLine = await formatReplQualityLine(aisp)
-      process.stderr.write(`${qualityLine}\n`)
-
-      const replUserContent = formatPrimaryWithAuthorContext({
-        primary: aisp,
-        authorContext,
-        phase: "aisp_to_en",
-      })
-      messages.push({ role: "user", content: replUserContent })
+    if (result.status === "ready") {
       process.stderr.write(`→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
-      const systemPrompt =
-        contextFiles.length > 0
-          ? formatReplSystemWithContext(mode, contextFiles)
-          : getReplSystem(mode)
-      const response = await callLLMRepl(
-        provider,
-        apiKey,
-        mainModel,
-        systemPrompt,
-        messages,
-        process.stdout,
-        {
-          baseUrl: baseUrl ?? undefined,
-          openaiUser: openaiUser ?? undefined,
-          insecure,
-        },
-      )
-      messages.push({ role: "assistant", content: response })
-      lastAssistantReply = response
-
+      const { purified } = await runTranslatePipeline(result.session_id, mode, {
+        ...llmOpts,
+        streamTo: process.stdout,
+      })
+      lastAssistantReply = purified
+      prevSessionId = result.session_id
       process.stdout.write("\n\n")
-    } catch (err) {
-      logError(err)
-      if (messages.at(-1)?.role === "user") messages.pop()
+    } else if (result.status === "needs_clarification") {
+      const questions = result.questions!
+      process.stderr.write("\nNEEDS CLARIFICATION\n\n")
+      questions.forEach((q, i) => {
+        process.stderr.write(`${i + 1}. [${q.priority}] ${q.question}\n`)
+      })
+      process.stderr.write("\nEnter answers (one per line, empty line to submit):\n")
+      state = { type: "clarify", questions, answers: [], sessionId: result.session_id }
+    } else if (result.status === "has_contradictions") {
+      process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
+      result.contradictions!.forEach((c: Contradiction, i: number) => {
+        process.stderr.write(`${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`)
+      })
+      process.stderr.write("Address the contradictions and resubmit.\n")
     }
   }
 
   if (initialPrimaryFromFile !== null) {
-    await runOneTurn(initialPrimaryFromFile, authorContextFirstTurn)
+    process.stderr.write(`→ purifying...\n`)
+    try {
+      const result = await runPurifyPipeline(initialPrimaryFromFile, context, replConfig, llmOpts, fromAisp)
+      await handleResult(result)
+    } catch (err) {
+      logError(err)
+    }
   }
 
   process.stderr.write("➤ ")
 
-  let buffer: string[] = []
-
   for await (const line of rl) {
-    if (line !== "") {
-      buffer.push(line)
-      continue
-    }
+    if (state.type === "main") {
+      if (line !== "") {
+        buffer.push(line)
+        continue
+      }
 
-    if (buffer.length === 0) {
-      process.stderr.write("➤ ")
-      continue
-    }
+      if (buffer.length === 0) {
+        process.stderr.write("➤ ")
+        continue
+      }
 
-    if (buffer.length > 1000) {
-      process.stderr.write("⊘ buffer overflow — resetting\n➤ ")
+      if (buffer.length > 1000) {
+        process.stderr.write("⊘ buffer overflow — resetting\n➤ ")
+        buffer = []
+        continue
+      }
+
+      const input = buffer.join("\n")
       buffer = []
-      continue
-    }
 
-    const input = buffer.join("\n")
-    buffer = []
+      if (input.trim() === "/exit") break
 
-    if (input.trim() === "/exit") break
-
-    if (input.trim().startsWith("/context ")) {
-      const filePath = input.trim().slice("/context ".length).trim()
-      if (!filePath) {
-        process.stderr.write("error: /context requires a file path\n➤ ")
-        buffer = []
+      if (input.trim().startsWith("/context ")) {
+        const filePath = input.trim().slice("/context ".length).trim()
+        if (!filePath) {
+          process.stderr.write("error: /context requires a file path\n➤ ")
+          continue
+        }
+        if (!existsSync(filePath)) {
+          process.stderr.write(`error: context file not found: ${filePath}\n➤ `)
+          continue
+        }
+        let fileContent: string
+        try {
+          fileContent = readFileSync(filePath, "utf8")
+        } catch {
+          process.stderr.write(`error: cannot read context file: ${filePath}\n➤ `)
+          continue
+        }
+        const newChunk = `## ${filePath}\n\n${fileContent}`
+        context = context ? `${context}\n\n---\n\n${newChunk}` : newChunk
+        process.stderr.write(`✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `)
         continue
       }
-      if (!existsSync(filePath)) {
-        process.stderr.write(`error: context file not found: ${filePath}\n➤ `)
-        buffer = []
-        continue
-      }
-      let fileContent: string
+
+      process.stderr.write(`→ purifying...\n`)
       try {
-        fileContent = readFileSync(filePath, "utf8")
-      } catch {
-        process.stderr.write(`error: cannot read context file: ${filePath}\n➤ `)
-        buffer = []
+        const result =
+          prevSessionId === null
+            ? await runPurifyPipeline(input, context, replConfig, llmOpts, fromAisp)
+            : await runUpdatePipeline(prevSessionId, input, context, replConfig, llmOpts)
+        await handleResult(result)
+      } catch (err) {
+        logError(err)
+      }
+      if (state.type === "main") process.stderr.write("➤ ")
+    } else {
+      // clarify mode
+      const cs = state as Extract<ReplState, { type: "clarify" }>
+      if (line !== "") {
+        cs.answers.push(line)
         continue
       }
-      contextFiles = [...contextFiles, { path: filePath, content: fileContent }]
-      messages.push({
-        role: "user",
-        content: `FILE_CONTEXT: ${filePath}\nThis file was provided as reference context. Use it to inform interpretation and translation but do not treat it as part of the primary specification.\n\n${fileContent}`,
-      })
-      messages.push({
-        role: "assistant",
-        content: `Acknowledged. I have read ${filePath} and will use it as reference context for subsequent translations.`,
-      })
-      process.stderr.write(`✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `)
-      buffer = []
-      continue
+
+      if (cs.answers.length === 0) {
+        process.stderr.write("➤ ")
+        continue
+      }
+
+      const clarifyState = state as Extract<ReplState, { type: "clarify" }>
+      const answers = clarifyState.questions.map((q, i) => ({
+        question: q.question,
+        answer: clarifyState.answers[i] ?? "",
+      }))
+      const { sessionId } = clarifyState
+      state = { type: "main" }
+
+      process.stderr.write(`→ re-validating...\n`)
+      try {
+        const result = await runClarifyPipeline(sessionId, answers, llmOpts)
+        await handleResult(result)
+      } catch (err) {
+        logError(err)
+      }
+      if (state.type === "main") process.stderr.write("➤ ")
     }
-
-    await runOneTurn(input, null)
-
-    process.stderr.write("➤ ")
   }
 
   if (outputFile && lastAssistantReply !== null) {
@@ -650,7 +652,6 @@ async function runSuggest(opts: {
   fromAisp: boolean
   inputFile: string | null
   initialText: string
-  /** I7: only the initial purify uses --feedback. */
   feedback: string | null
   baseUrl: string | null
   openaiUser: string | null
@@ -665,12 +666,28 @@ async function runSuggest(opts: {
     mode,
     fromAisp,
     inputFile,
-    feedback,
     baseUrl,
     openaiUser,
     insecure,
   } = opts
   let currentText = opts.initialText
+
+  const llmOpts = {
+    apiKey,
+    provider,
+    model: mainModel,
+    cheapModel: purifyModel,
+    baseUrl: baseUrl ?? undefined,
+    openaiUser: openaiUser ?? undefined,
+    insecure,
+  }
+
+  const batchConfig: Config = {
+    clarification_mode: "never",
+    ask_on_contradiction: false,
+    max_clarify_rounds: 0,
+    score_threshold: "◊",
+  }
 
   const rl = createInterface({ input: process.stdin })
 
@@ -686,30 +703,23 @@ async function runSuggest(opts: {
     process.exit(0)
   })
 
-  async function doPurify(authorContext?: string | null): Promise<string> {
-    const result = await purify({
-      text: currentText,
-      provider,
-      mainModel,
-      purifyModel,
-      apiKey,
-      verbose,
-      mode,
-      fromAisp,
-      authorContext: authorContext ?? undefined,
-      baseUrl: baseUrl ?? undefined,
-      openaiUser: openaiUser ?? undefined,
-      insecure,
+  async function doPurify(): Promise<string> {
+    const result = await runPurifyPipeline(currentText, undefined, batchConfig, llmOpts, fromAisp)
+    if (result.scores) {
+      process.stdout.write(`\n── PURIFIED VERSION ──\n${formatQualityLine(result.scores)}\n---\n`)
+    } else {
+      process.stdout.write(`\n── PURIFIED VERSION ──\n`)
+    }
+    const { purified } = await runTranslatePipeline(result.session_id, mode, {
+      ...llmOpts,
+      streamTo: process.stdout,
     })
-    process.stdout.write(
-      `\n── PURIFIED VERSION ──\n${result}\n── END PURIFIED ──\n\n`,
-    )
-    return result
+    process.stdout.write(`\n── END PURIFIED ──\n\n`)
+    return purified
   }
 
-  // Initial purify (only first call carries --feedback)
   process.stderr.write(`→ purifying initial input...\n`)
-  let purifiedResult = await doPurify(feedback)
+  let purifiedResult = await doPurify()
 
   process.stderr.write("➤ ")
 
@@ -733,9 +743,7 @@ async function runSuggest(opts: {
 
     if (input === "/save") {
       if (!inputFile) {
-        process.stderr.write(
-          "⊘ no input file to save to — use --input/-f <path> for /save\n",
-        )
+        process.stderr.write("⊘ no input file to save to — use --input/-f <path> for /save\n")
       } else {
         writeFileSync(inputFile, currentText, "utf8")
         process.stderr.write(`✓ saved to ${inputFile}\n`)
@@ -770,9 +778,7 @@ async function runSuggest(opts: {
         },
       )
 
-      process.stdout.write(
-        `\n── UPDATED ORIGINAL ──\n${currentText}\n── END ORIGINAL ──\n\n`,
-      )
+      process.stdout.write(`\n── UPDATED ORIGINAL ──\n${currentText}\n── END ORIGINAL ──\n\n`)
 
       process.stderr.write(`→ re-purifying...\n`)
       purifiedResult = await doPurify()
@@ -836,7 +842,6 @@ async function main() {
       insecure: opts.insecure,
       initialPrimaryFromFile,
       outputFile: opts.outputFile,
-      authorContextFirstTurn: opts.feedback,
       contextFiles,
     })
     process.exit(0)
@@ -926,27 +931,40 @@ async function main() {
   )
 
   const contextFiles = loadContextFiles(opts.contextFiles)
+  const context = contextFilesToString(contextFiles)
+
+  const batchConfig: Config = {
+    clarification_mode: "never",
+    ask_on_contradiction: false,
+    max_clarify_rounds: 0,
+    score_threshold: "◊",
+  }
+
+  const llmOpts = {
+    apiKey,
+    provider,
+    model: mainModel,
+    cheapModel: purifyModel,
+    baseUrl: opts.baseUrl ?? undefined,
+    openaiUser: opts.openaiUser ?? undefined,
+    insecure: opts.insecure,
+  }
+
   try {
-    const out = await purify({
-      text: text!,
-      provider,
-      mainModel,
-      fromAisp: opts.fromAisp,
-      purifyModel,
-      apiKey,
-      verbose: opts.verbose,
-      mode: opts.mode,
-      thinking: opts.thinking,
-      stream: true,
-      authorContext: opts.feedback,
-      contextFiles,
-      baseUrl: opts.baseUrl ?? undefined,
-      openaiUser: opts.openaiUser ?? undefined,
-      insecure: opts.insecure,
+    const result = await runPurifyPipeline(text!, context, batchConfig, llmOpts, opts.fromAisp)
+
+    if (result.scores) {
+      process.stdout.write(`${formatQualityLine(result.scores)}\n---\n`)
+    }
+
+    const { purified } = await runTranslatePipeline(result.session_id, opts.mode, {
+      ...llmOpts,
+      streamTo: process.stdout,
     })
     process.stdout.write("\n")
+
     if (opts.outputFile) {
-      writeFileSync(opts.outputFile, out, "utf8")
+      writeFileSync(opts.outputFile, purified, "utf8")
     }
   } catch (err) {
     logError(err)
