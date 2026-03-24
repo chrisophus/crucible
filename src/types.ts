@@ -106,6 +106,7 @@ export interface PurifyRunResult {
   contradictions?: Contradiction[]
   purified?: string
   context_hint?: string
+  scores?: Scores
 }
 
 // ── Legacy types used by CLI pipeline ─────────────────────────────────────────
