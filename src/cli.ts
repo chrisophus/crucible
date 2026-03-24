@@ -35,7 +35,11 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { createInterface } from "node:readline"
+
+const require = createRequire(import.meta.url)
+const { version: PURIFY_VERSION } = require("../package.json") as { version: string }
 import Anthropic from "@anthropic-ai/sdk"
 import { eprint, purify } from "./core.ts"
 import {
@@ -248,6 +252,7 @@ function parseArgs(argv: string[]) {
     thinking: false,
     estimate: false,
     help: false,
+    version: false,
     inputFile: null as string | null,
     feedback: null as string | null,
     outputFile: null as string | null,
@@ -258,6 +263,8 @@ function parseArgs(argv: string[]) {
     const a = args[i]
     if (a === "--help" || a === "-h") {
       opts.help = true
+    } else if (a === "--version" || a === "-v") {
+      opts.version = true
     } else if (a === "-f" || a === "--input") {
       const p = args[++i]
       if (!p || p.startsWith("-")) {
@@ -358,7 +365,7 @@ function parseArgs(argv: string[]) {
 
 function printHelp() {
   console.log(`\
-purify — AISP round-trip spec purification
+purify v${PURIFY_VERSION} — AISP round-trip spec purification
 
 Usage:
   purify [options] -f <path> | "inline text" | stdin
@@ -370,27 +377,28 @@ Usage:
   Use -f / --input for file input. Do not combine -f with positional text.
 
 Options:
+  --repl         interactive session with chat context and prompt caching
+                 REPL commands: /context <path> (add context mid-session), /exit
+  --suggest      show purified version then suggest changes applied to the original
   --input, -f    read primary specification from this file path
-  --context, -c  add a file as reference context (repeatable); e.g. --context style-guide.md -c api-types.ts
-  --feedback     author context for one shot (clarifications / extra context / suggestion); quote for spaces
-  --output, -o   write final English to this path (batch: full stdout payload; REPL: last assistant reply on /exit or EOF)
+  --context, -c  add a file as reference context (repeatable); e.g. -c style-guide.md -c api-types.ts
+  --feedback     author context for one shot (clarifications / extra context); quote for spaces
+  --output, -o   write final English to this path (batch: full stdout payload; REPL: last reply on /exit or EOF)
+  --mode         formal|narrative|hybrid|sketch|summary      (default: narrative)
+  --mode-file    path to a skill markdown file that specifies the mode
   --provider     anthropic | openai                          (default: anthropic)
   --model        main model (AISP→English)                   (default: claude-sonnet-4-6)
   --purify-model cheap model (En→AISP)                       (default: claude-haiku-4-5-20251001)
-  --mode         formal|narrative|hybrid|sketch|summary      (default: narrative)
-  --mode-file    path to a skill markdown file that specifies the mode
   --api-key      API key                                     (default: env var)
   --base-url     OpenAI-compatible base URL                  (default: OPENAI_BASE_URL)
   --user         OpenAI user identifier for tracking         (default: OPENAI_USER)
   --insecure     disable TLS certificate verification        (default: OPENAI_INSECURE=1)
   --from-aisp    skip step 1 — input is already AISP
-  --repl         interactive session with chat context and prompt caching
-                 REPL commands: /context <path> (add context mid-session), /exit
-  --suggest      show purified version then suggest changes applied to the original
   --thinking     enable extended thinking for Step 3 (Anthropic Sonnet/Opus only)
   --estimate     count input tokens for Step 1 and exit without calling the main model
   --verbose      write AISP and scores to stderr
-  --help
+  --version, -v
+  --help, -h
 
 Modes:
   formal     Full precision; tables and notation throughout
@@ -414,14 +422,18 @@ Output:
   <purified English or NEEDS_CLARIFICATION block>
 
 Examples:
-  purify -f spec.md > purified.md
+  purify -f spec.md
   purify -f spec.md -o purified.md
   purify "add a status field with draft, active, archived"
+  purify -f spec.md --suggest
+  purify --repl -c style-guide.md
+  purify -f spec.md --feedback "focus on the auth section"
   purify -f spec.md --verbose 2>aisp_debug.md
-  purify -f spec.md --purify-model claude-haiku-4-5-20251001
-  purify "add a status field" --context style-guide.md
   purify "add a status field" -c style-guide.md -c api-types.ts
-  purify --repl --context style-guide.md
+
+Other surfaces:
+  purify-mcp     MCP server (stdio) — use with Claude Code / Claude Desktop
+                 Run \`purify-mcp --help\` for configuration instructions.
 `)
 }
 
@@ -778,6 +790,11 @@ async function runSuggest(opts: {
 
 async function main() {
   const { opts, positional } = parseArgs(process.argv)
+
+  if (opts.version) {
+    console.log(`purify v${PURIFY_VERSION}`)
+    process.exit(0)
+  }
 
   if (opts.help) {
     printHelp()
