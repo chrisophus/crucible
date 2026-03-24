@@ -40,6 +40,7 @@ const require = createRequire(import.meta.url)
 const { version: PURIFY_VERSION } = require("../package.json") as { version: string }
 import Anthropic from "@anthropic-ai/sdk"
 import {
+  addContextToSession,
   runClarifyPipeline,
   runPatchPipeline,
   runPurifyPipeline,
@@ -135,12 +136,6 @@ function loadContextFiles(paths: string[]): ContextFile[] {
 
 function eprint(msg: string, verbose: boolean): void {
   if (verbose) process.stderr.write(`${msg}\n`)
-}
-
-/** Convert loaded context files to a single context string for the session system prompt. */
-function contextFilesToString(files: ContextFile[]): string | undefined {
-  if (!files.length) return undefined
-  return files.map((f) => `## ${f.path}\n\n${f.content}`).join("\n\n---\n\n")
 }
 
 /** Format quality scores as a QUALITY header line. */
@@ -495,7 +490,7 @@ async function runRepl(opts: {
     score_threshold: "◊",
   }
 
-  let context = contextFilesToString(opts.contextFiles)
+  let pendingContextFiles: ContextFile[] = []
   let prevSessionId: string | null = null
   let lastAssistantReply: string | null = null
   let state: ReplState = { type: "main" }
@@ -554,7 +549,9 @@ async function runRepl(opts: {
   if (initialPrimaryFromFile !== null) {
     process.stderr.write(`→ purifying...\n`)
     try {
-      const result = await runPurifyPipeline(initialPrimaryFromFile, context, replConfig, llmOpts, fromAisp)
+      const startContextFiles = [...opts.contextFiles, ...pendingContextFiles]
+      pendingContextFiles = []
+      const result = await runPurifyPipeline(initialPrimaryFromFile, startContextFiles, replConfig, llmOpts, fromAisp)
       await handleResult(result)
     } catch (err) {
       logError(err)
@@ -603,8 +600,12 @@ async function runRepl(opts: {
           process.stderr.write(`error: cannot read context file: ${filePath}\n➤ `)
           continue
         }
-        const newChunk = `## ${filePath}\n\n${fileContent}`
-        context = context ? `${context}\n\n---\n\n${newChunk}` : newChunk
+        const contextFile = { path: filePath, content: fileContent }
+        if (prevSessionId !== null) {
+          addContextToSession(prevSessionId, [contextFile])
+        } else {
+          pendingContextFiles.push(contextFile)
+        }
         process.stderr.write(`✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `)
         continue
       }
@@ -645,10 +646,14 @@ async function runRepl(opts: {
 
       process.stderr.write(`→ purifying...\n`)
       try {
-        const result =
-          prevSessionId === null
-            ? await runPurifyPipeline(input, context, replConfig, llmOpts, fromAisp)
-            : await runUpdatePipeline(prevSessionId, input, context, replConfig, llmOpts)
+        let result
+        if (prevSessionId === null) {
+          const startContextFiles = [...opts.contextFiles, ...pendingContextFiles]
+          pendingContextFiles = []
+          result = await runPurifyPipeline(input, startContextFiles, replConfig, llmOpts, fromAisp)
+        } else {
+          result = await runUpdatePipeline(prevSessionId, input, replConfig, llmOpts)
+        }
         await handleResult(result)
       } catch (err) {
         logError(err)
@@ -755,7 +760,7 @@ async function runSuggest(opts: {
   })
 
   async function doPurify(): Promise<string> {
-    const result = await runPurifyPipeline(currentText, undefined, batchConfig, llmOpts, fromAisp)
+    const result = await runPurifyPipeline(currentText, [], batchConfig, llmOpts, fromAisp)
     if (result.scores) {
       process.stdout.write(`\n── PURIFIED VERSION ──\n${formatQualityLine(result.scores)}\n---\n`)
     } else {
@@ -1031,7 +1036,6 @@ async function main() {
   )
 
   const contextFiles = loadContextFiles(opts.contextFiles)
-  const context = contextFilesToString(contextFiles)
 
   const batchConfig: Config = {
     clarification_mode: "never",
@@ -1051,7 +1055,7 @@ async function main() {
   }
 
   try {
-    const result = await runPurifyPipeline(text!, context, batchConfig, llmOpts, opts.fromAisp)
+    const result = await runPurifyPipeline(text!, contextFiles, batchConfig, llmOpts, opts.fromAisp)
 
     process.stderr.write(`SESSION: ${result.session_id}\n`)
 

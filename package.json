@@ -2,6 +2,10 @@
   "name": "purify",
   "version": "1.0.0",
   "type": "module",
+  "files": [
+    "dist/",
+    "README.md"
+  ],
   "bin": {
     "purify": "dist/cli.js",
     "purify-mcp": "dist/mcp.js"

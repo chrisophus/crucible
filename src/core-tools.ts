@@ -10,9 +10,11 @@
 
 import { readFileSync } from "node:fs"
 import {
+  CONTEXT_ACK,
   CONTRADICTION_DETECTION_SYSTEM,
   INIT_SYSTEM,
   buildAnswersTurnContent,
+  buildContextTurnContent,
   buildPatchRequestContent,
   buildPatchTranslateContent,
   buildPurifyTurnContent,
@@ -26,6 +28,7 @@ import { createSession, getSession, saveSession } from "./sessions.ts"
 import type {
   AispBlock,
   Config,
+  ContextFile,
   Contradiction,
   Gap,
   PatchResult,
@@ -213,6 +216,28 @@ async function computeValidationResult(
   const gaps = computeGaps(validatorResult, scores)
 
   return { scores, contradictions, gaps }
+}
+
+// ── Context injection ─────────────────────────────────────────────────────────
+
+/** Append a context user+ack turn pair to the session — no LLM call. */
+function injectContextTurn(session: Session, files: ContextFile[]): void {
+  if (!files.length) return
+  session.messages.push(
+    { role: "user", content: buildContextTurnContent(files) },
+    { role: "assistant", content: CONTEXT_ACK },
+  )
+  saveSession(session)
+}
+
+/**
+ * Add context files to an existing session as a conversation turn.
+ * Use this for mid-session context additions (e.g. REPL /context command).
+ */
+export function addContextToSession(sessionId: string, files: ContextFile[]): void {
+  if (!files.length) return
+  const session = getSession(sessionId)
+  injectContextTurn(session, files)
 }
 
 // ── Phase 1: Purify (English → AISP) ──────────────────────────────────────────
@@ -429,14 +454,16 @@ async function runPhase4(
 // purify_run — starts a session, runs Phase1→Phase3
 export async function runPurifyPipeline(
   text: string,
-  context: string | undefined,
+  contextFiles: ContextFile[],
   config: Config,
   opts: LLMOpts,
   fromAisp = false,
 ): Promise<PurifyRunResult> {
   const resolved = resolveOpts(opts)
-  const systemPrompt = getSessionSystemPrompt(context)
-  const session = createSession(systemPrompt, config)
+  const session = createSession(getSessionSystemPrompt(), config)
+  if (contextFiles.length > 0) {
+    injectContextTurn(session, contextFiles)
+  }
 
   let aisp: string
   if (fromAisp) {
@@ -540,19 +567,14 @@ export async function runTranslatePipeline(
 export async function runUpdatePipeline(
   sessionId: string,
   change: string,
-  context: string | undefined,
   config: Config,
   opts: LLMOpts,
 ): Promise<PurifyRunResult> {
   const prev = getSession(sessionId)
   const resolved = resolveOpts(opts)
 
-  // Seed new session with previous conversation
-  const systemPrompt =
-    context != null
-      ? getSessionSystemPrompt(context)
-      : prev.systemPrompt
-  const newSession = createSession(systemPrompt, config)
+  // Seed new session with previous conversation (context already lives in prev.messages)
+  const newSession = createSession(prev.systemPrompt, config)
   newSession.messages = [...prev.messages]
   saveSession(newSession)
 

@@ -69,7 +69,7 @@ import {
   runTranslatePipeline,
   runUpdatePipeline,
 } from "./core-tools.ts"
-import type { Config } from "./types.ts"
+import type { Config, ContextFile } from "./types.ts"
 import { DEFAULT_CONFIG } from "./types.ts"
 
 // ── Tool definitions ───────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ const TOOLS: Tool[] = [
         context: {
           type: "string",
           description:
-            "Optional domain context from purify.context.md. Injected as cached system prompt.",
+            "Optional domain context from purify.context.md. Injected as a context turn at the start of the session conversation.",
         },
         config: {
           type: "object",
@@ -203,10 +203,6 @@ const TOOLS: Tool[] = [
           type: "string",
           description: "Natural language description of the change to apply",
         },
-        context: {
-          type: "string",
-          description: "Optional updated domain context from purify.context.md",
-        },
         config: {
           type: "object",
           description: "Optional pipeline configuration for the new session",
@@ -294,7 +290,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         config?: Partial<Config>
       }
       const config: Config = { ...DEFAULT_CONFIG, ...configInput }
-      const result = await runPurifyPipeline(text, context, config, {})
+      const contextFiles: ContextFile[] = context
+        ? [{ path: "purify.context.md", content: context }]
+        : []
+      const result = await runPurifyPipeline(text, contextFiles, config, {})
       if (!context) {
         result.context_hint =
           "No context provided. Run purify_init on your project files once to generate purify.context.md, " +
@@ -322,14 +321,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === "purify_update") {
-      const { session_id, change, context, config: configInput } = args as {
+      const { session_id, change, config: configInput } = args as {
         session_id: string
         change: string
-        context?: string
         config?: Partial<Config>
       }
       const config: Config = { ...DEFAULT_CONFIG, ...configInput }
-      const result = await runUpdatePipeline(session_id, change, context, config, {})
+      const result = await runUpdatePipeline(session_id, change, config, {})
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
     }
 
