@@ -78,7 +78,7 @@ const TOOLS: Tool[] = [
   {
     name: "purify_run",
     description:
-      "Start a purify session. Translates natural language through AISP to expose ambiguity, " +
+      "Step 1. Start a purify session. Translates natural language through AISP to expose ambiguity, " +
       "validates the result, and returns immediately with one of: " +
       "status=ready (call purify_translate next), " +
       "status=needs_clarification (questions returned — collect author answers and call purify_clarify), " +
@@ -131,7 +131,7 @@ const TOOLS: Tool[] = [
   {
     name: "purify_clarify",
     description:
-      "Submit answers to clarifying questions and re-run validation. " +
+      "Step 2 (conditional). Submit answers to clarifying questions and re-run validation. " +
       "Call this after purify_run or purify_clarify returns status=needs_clarification. " +
       "The session conversation is updated with answers and a refined AISP. " +
       "Returns the same status variants as purify_run. " +
@@ -162,7 +162,7 @@ const TOOLS: Tool[] = [
   {
     name: "purify_translate",
     description:
-      "Translate the purified AISP to natural language. " +
+      "Step 3. Translate the purified AISP to natural language. " +
       "Call this when purify_run or purify_clarify returns status=ready. " +
       "Uses the full accumulated session conversation as context for faithful translation. " +
       "Returns the purified English text.",
@@ -187,7 +187,7 @@ const TOOLS: Tool[] = [
   {
     name: "purify_update",
     description:
-      "Update an existing purified spec by applying a change. " +
+      "Step 1 (update). Update an existing purified spec by applying a change. " +
       "Seeds a new session from the previous session's conversation, " +
       "appends the change as a new turn, and re-runs the full pipeline. " +
       "Returns the same status variants as purify_run — follow the same " +
@@ -224,9 +224,10 @@ const TOOLS: Tool[] = [
   {
     name: "purify_init",
     description:
-      "One-time project setup. Reads existing project files (specs, schemas, docs, AISP files) " +
+      "Setup (once per project). Reads existing project files (specs, schemas, docs, AISP files) " +
       "and generates the content for purify.context.md — a domain model that improves all subsequent " +
-      "purify sessions for this project. Pass the file path to purify_run as the context parameter.",
+      "purify sessions for this project. Pass the file path to purify_run as the context parameter. " +
+      "Run this before your first purify_run for best results.",
     inputSchema: {
       type: "object",
       properties: {
@@ -262,6 +263,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
       const config: Config = { ...DEFAULT_CONFIG, ...configInput }
       const result = await runPurifyPipeline(text, context, config, {})
+      if (!context) {
+        result.context_hint =
+          "No context provided. Run purify_init on your project files once to generate purify.context.md, " +
+          "then pass its contents as the context parameter for higher-quality output."
+      }
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }
     }
 

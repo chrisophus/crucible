@@ -21,15 +21,27 @@ The purified output — not the AISP — is the deliverable.
 
 ---
 
+## Surfaces
+
+| Surface | Best for | Setup |
+|---------|----------|-------|
+| **CLI** | One-shot purification, scripts, shell pipelines | `npm install -g .` |
+| **MCP server** | AI-assisted iterative refinement with clarification loops | `purify-mcp` in PATH |
+| **`/purify-spec`** | Inline Claude Code command (no install required) | Copy skill file |
+
+**Upgrade path**: start with the CLI → add the MCP server when you want multi-round clarification loops → run `purify_init` once to generate project context for consistently higher-quality output.
+
+---
+
 ## Install
 
 ```bash
 git clone https://github.com/chrisophus/crucible
 cd crucible
-./install.sh
+npm install -g .
 ```
 
-Requires Node.js. Make sure `~/.local/bin` is in your `PATH`.
+Requires Node.js.
 
 ---
 
@@ -41,13 +53,15 @@ Requires Node.js. Make sure `~/.local/bin` is in your `PATH`.
 purify "inline text or requirement"
 purify -f spec.md
 cat spec.md | purify
-purify --repl
-purify --repl -f spec.md
+purify -f spec.md --suggest           # iterative suggestion mode
+purify --repl -c style-guide.md       # interactive REPL with context
 ```
 
 File input uses `-f` / `--input`. Positional arguments are always literal strings, not paths. Optional: `--feedback` (one-shot author context), `-o` / `--output` (write final English).
 
-### MCP server (for Claude Desktop, Cursor, opencode, etc.)
+Run `purify --help` for the full option list.
+
+### MCP server (for Claude Code, Claude Desktop, Cursor, opencode, etc.)
 
 Add to your MCP config:
 
@@ -61,6 +75,8 @@ Add to your MCP config:
   }
 }
 ```
+
+Run `purify-mcp --help` for full configuration instructions.
 
 ---
 
@@ -183,16 +199,22 @@ QUALITY: ◊⁺⁺ platinum (δ=0.91, self_δ=0.85)
 ## CLI Options
 
 ```
+--repl       interactive session with prompt caching
+--suggest    show purified version then suggest changes to the original
+--input, -f  read specification from file
+--context, -c  add reference context file (repeatable)
+--feedback   one-shot author context; quote for spaces
+--output, -o write final English to file
+--mode       formal|narrative|hybrid|sketch|summary  (default: narrative)
+--formal / --narrative / --hybrid / --sketch / --summary   shorthand mode flags
 --provider   anthropic | openai               (default: anthropic)
 --model      main model (AISP → English)      (default: claude-sonnet-4-6)
 --purify-model  cheap model (En → AISP)       (default: claude-haiku-4-5-20251001)
---mode       formal|narrative|hybrid|sketch|summary  (default: narrative)
---formal / --narrative / --hybrid / --sketch / --summary   shorthand mode flags
 --api-key    API key                          (default: env var)
 --from-aisp  skip step 1 — input is already AISP
---repl       interactive session with prompt caching
 --verbose    write AISP intermediate and scores to stderr
---help
+--version, -v
+--help, -h
 ```
 
 ## Environment variables
