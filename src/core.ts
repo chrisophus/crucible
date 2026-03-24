@@ -4,7 +4,7 @@ import {
   TO_AISP_SYSTEM,
 } from "./prompts.ts"
 import { callLLM, callLLMWithTools } from "./providers.ts"
-import type { Mode, Provider } from "./types.ts"
+import type { ContextFile, Mode, Provider } from "./types.ts"
 import { parseEvidence, runValidator, TIER_NAMES } from "./validator.ts"
 
 export function eprint(msg: string, verbose: boolean): void {
@@ -27,6 +27,7 @@ export async function purify(opts: {
   insecure?: boolean
   /** Separate author channel; not spliced into primary text (labeled sections in prompts). */
   authorContext?: string | null
+  contextFiles?: ContextFile[]
 }): Promise<string> {
   const {
     text,
@@ -43,18 +44,21 @@ export async function purify(opts: {
     openaiUser,
     insecure,
     authorContext,
+    contextFiles,
   } = opts
 
   const step1User = formatPrimaryWithAuthorContext({
     primary: text,
     authorContext,
     phase: "en_to_aisp",
+    contextFiles,
   })
   const step3User = (aispDoc: string) =>
     formatPrimaryWithAuthorContext({
       primary: aispDoc,
       authorContext,
       phase: "aisp_to_en",
+      contextFiles,
     })
 
   let aisp: string
