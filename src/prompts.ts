@@ -388,27 +388,36 @@ Each user message is an AISP document representing their intent.`
   )
 }
 
-/** Appends FILE_CONTEXT blocks to the REPL system prompt for startup context files. */
-export function formatReplSystemWithContext(mode: Mode, contextFiles: ContextFile[]): string {
-  const base = getReplSystem(mode)
-  if (!contextFiles.length) return base
-  const blocks = contextFiles.map(
-    (f) =>
-      `FILE_CONTEXT: ${f.path}\nThis file was provided as reference context. Use it to inform interpretation and translation but do not treat it as part of the primary specification.\n\n${f.content}`,
-  )
-  return base + "\n\n" + blocks.join("\n\n")
-}
-
 // ── V3: Session pipeline prompts ───────────────────────────────────────────────
 
-// System prompt for purify sessions: AISP spec + optional domain context.
-// Cached for the session lifetime. No translation-direction instructions —
-// those are in the user turns.
-export function getSessionSystemPrompt(context?: string): string {
-  if (context) {
-    return `${AISP_SPEC}\n\nDOMAIN CONTEXT:\n${context}`
-  }
+// System prompt for purify sessions: AISP spec only.
+// Stable for the full session lifetime — never varies by context.
+// Domain context is injected as explicit conversation turns instead.
+export function getSessionSystemPrompt(): string {
   return AISP_SPEC
+}
+
+// Synthetic assistant acknowledgement for context injection turns.
+export const CONTEXT_ACK =
+  "Understood. I have noted the domain context files. Ready to begin."
+
+// User-side content for a context injection turn.
+// Formats one FILE_CONTEXT block per file.
+export function buildContextTurnContent(files: ContextFile[]): string {
+  const blocks = files
+    .map(
+      (f) =>
+        `FILE_CONTEXT: ${f.path}\n` +
+        `This file was provided as domain context. Use it to inform all interpretation, ` +
+        `translation, and clarification during this session. ` +
+        `Do not treat it as the primary specification to be purified.\n\n${f.content}`,
+    )
+    .join("\n\n")
+  return (
+    `CONTEXT FILES\n\n` +
+    `The following files have been provided as domain context for this session.\n\n` +
+    blocks
+  )
 }
 
 // PurifyTurn content: instruction + raw text
