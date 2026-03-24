@@ -1,4 +1,8 @@
-import { getToEnglishSystem, TO_AISP_SYSTEM } from "./prompts.ts"
+import {
+  formatPrimaryWithAuthorContext,
+  getToEnglishSystem,
+  TO_AISP_SYSTEM,
+} from "./prompts.ts"
 import { callLLM, callLLMWithTools } from "./providers.ts"
 import type { Mode, Provider } from "./types.ts"
 import { parseEvidence, runValidator, TIER_NAMES } from "./validator.ts"
@@ -21,6 +25,8 @@ export async function purify(opts: {
   baseUrl?: string
   openaiUser?: string
   insecure?: boolean
+  /** Separate author channel; not spliced into primary text (labeled sections in prompts). */
+  authorContext?: string | null
 }): Promise<string> {
   const {
     text,
@@ -36,7 +42,20 @@ export async function purify(opts: {
     baseUrl,
     openaiUser,
     insecure,
+    authorContext,
   } = opts
+
+  const step1User = formatPrimaryWithAuthorContext({
+    primary: text,
+    authorContext,
+    phase: "en_to_aisp",
+  })
+  const step3User = (aispDoc: string) =>
+    formatPrimaryWithAuthorContext({
+      primary: aispDoc,
+      authorContext,
+      phase: "aisp_to_en",
+    })
 
   let aisp: string
   if (fromAisp) {
@@ -49,12 +68,19 @@ export async function purify(opts: {
     eprint(`→ purifying (${purifyModel})...`, verbose)
     aisp =
       provider === "anthropic"
-        ? await callLLMWithTools(apiKey, purifyModel, text)
-        : await callLLM(provider, apiKey, purifyModel, TO_AISP_SYSTEM, text, {
-            baseUrl,
-            openaiUser,
-            insecure,
-          })
+        ? await callLLMWithTools(apiKey, purifyModel, step1User)
+        : await callLLM(
+            provider,
+            apiKey,
+            purifyModel,
+            TO_AISP_SYSTEM,
+            step1User,
+            {
+              baseUrl,
+              openaiUser,
+              insecure,
+            },
+          )
   }
 
   if (verbose) {
@@ -108,6 +134,8 @@ export async function purify(opts: {
 
   // Step 3: AISP → English or clarifying questions (main model)
   eprint(`→ translating back (${mainModel})...`, verbose)
+  const translateUser = step3User(aisp)
+
   if (stream) {
     process.stdout.write(`${qualityHeader}\n---\n`)
     const english = await callLLM(
@@ -115,7 +143,7 @@ export async function purify(opts: {
       apiKey,
       mainModel,
       getToEnglishSystem(mode),
-      aisp,
+      translateUser,
       { streamTo: process.stdout, thinking, baseUrl, openaiUser, insecure },
     )
     return `${qualityHeader}\n---\n${english}`
@@ -126,7 +154,7 @@ export async function purify(opts: {
     apiKey,
     mainModel,
     getToEnglishSystem(mode),
-    aisp,
+    translateUser,
     { thinking, baseUrl, openaiUser, insecure },
   )
 
