@@ -1,4 +1,4 @@
-import type { Mode } from "./types.ts"
+import type { ContextFile, Mode } from "./types.ts"
 
 // Full AISP 5.1 Platinum Specification (source: https://github.com/bar181/aisp-open-core/blob/main/AI_GUIDE.md)
 export const AISP_SPEC = `\
@@ -185,26 +185,47 @@ export function formatPrimaryWithAuthorContext(args: {
   authorContext: string | null | undefined
   /** English→AISP vs AISP→English — adjusts how the primary block is described. */
   phase: "en_to_aisp" | "aisp_to_en"
+  contextFiles?: ContextFile[]
 }): string {
   const ctx = args.authorContext?.trim()
-  if (!ctx) return args.primary
+  const files = args.contextFiles?.length ? args.contextFiles : null
+  if (!ctx && !files) return args.primary
 
   const primaryNote =
     args.phase === "en_to_aisp"
       ? "The PRIMARY_SPECIFICATION block below is English source text to translate into AISP."
       : "The PRIMARY_SPECIFICATION block below is an AISP document to translate into English markdown."
 
-  return [
+  const parts = [
     "PRIMARY_SPECIFICATION",
     primaryNote,
     "",
     args.primary,
-    "",
-    "AUTHOR_CONTEXT",
-    "This block is a separate channel: clarification answers, extra context, or a one-shot suggestion from the author. It MUST NOT be treated as part of the primary specification text for editing, splicing, or formalization. Use it only to inform interpretation and translation.",
-    "",
-    ctx,
-  ].join("\n")
+  ]
+
+  if (ctx) {
+    parts.push(
+      "",
+      "AUTHOR_CONTEXT",
+      "This block is a separate channel: clarification answers, extra context, or a one-shot suggestion from the author. It MUST NOT be treated as part of the primary specification text for editing, splicing, or formalization. Use it only to inform interpretation and translation.",
+      "",
+      ctx,
+    )
+  }
+
+  if (files) {
+    for (const f of files) {
+      parts.push(
+        "",
+        `FILE_CONTEXT: ${f.path}`,
+        "This file was provided as reference context. Use it to inform interpretation and translation but do not treat it as part of the primary specification.",
+        "",
+        f.content,
+      )
+    }
+  }
+
+  return parts.join("\n")
 }
 
 export function getToEnglishSystem(mode: Mode): string {
@@ -365,6 +386,17 @@ Maintain continuity with the conversation history — when the user refines or \
 extends a spec, integrate the changes and return the complete current specification. \
 Each user message is an AISP document representing their intent.`
   )
+}
+
+/** Appends FILE_CONTEXT blocks to the REPL system prompt for startup context files. */
+export function formatReplSystemWithContext(mode: Mode, contextFiles: ContextFile[]): string {
+  const base = getReplSystem(mode)
+  if (!contextFiles.length) return base
+  const blocks = contextFiles.map(
+    (f) =>
+      `FILE_CONTEXT: ${f.path}\nThis file was provided as reference context. Use it to inform interpretation and translation but do not treat it as part of the primary specification.\n\n${f.content}`,
+  )
+  return base + "\n\n" + blocks.join("\n\n")
 }
 
 // ── V3: Session pipeline prompts ───────────────────────────────────────────────

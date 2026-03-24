@@ -41,6 +41,7 @@ import { eprint, purify } from "./core.ts"
 import {
   APPLY_SUGGESTION_SYSTEM,
   formatPrimaryWithAuthorContext,
+  formatReplSystemWithContext,
   getReplSystem,
   TO_AISP_SYSTEM,
 } from "./prompts.ts"
@@ -52,7 +53,7 @@ import {
   DEFAULT_MODELS,
   TO_AISP_SYSTEM_WITH_TOOLS,
 } from "./providers.ts"
-import type { ConvMessage, Mode, Provider } from "./types.ts"
+import type { ContextFile, ConvMessage, Mode, Provider } from "./types.ts"
 import { parseEvidence, runValidator, TIER_NAMES } from "./validator.ts"
 
 // ── Error logging ──────────────────────────────────────────────────────────────
@@ -114,6 +115,21 @@ function ensureNoInputFileAndPositionalConflict(
     )
     process.exit(1)
   }
+}
+
+function loadContextFiles(paths: string[]): ContextFile[] {
+  return paths.map((p) => {
+    if (!existsSync(p)) {
+      process.stderr.write(`error: context file not found: ${p}\n`)
+      process.exit(1)
+    }
+    try {
+      return { path: p, content: readFileSync(p, "utf8") }
+    } catch {
+      process.stderr.write(`error: cannot read context file: ${p}\n`)
+      process.exit(1)
+    }
+  })
 }
 
 async function formatReplQualityLine(aisp: string): Promise<string> {
@@ -235,6 +251,7 @@ function parseArgs(argv: string[]) {
     inputFile: null as string | null,
     feedback: null as string | null,
     outputFile: null as string | null,
+    contextFiles: [] as string[],
   }
 
   for (let i = 0; i < args.length; i++) {
@@ -296,6 +313,13 @@ function parseArgs(argv: string[]) {
       opts.mode = "sketch"
     } else if (a === "--summary") {
       opts.mode = "summary"
+    } else if (a === "-c" || a === "--context") {
+      const p = args[++i]
+      if (!p || p.startsWith("-")) {
+        process.stderr.write(`error: ${a} requires a file path\n`)
+        process.exit(1)
+      }
+      opts.contextFiles.push(p)
     } else if (a === "--api-key") {
       opts.apiKey = args[++i]
     } else if (a === "--base-url") {
@@ -347,6 +371,7 @@ Usage:
 
 Options:
   --input, -f    read primary specification from this file path
+  --context, -c  add a file as reference context (repeatable); e.g. --context style-guide.md -c api-types.ts
   --feedback     author context for one shot (clarifications / extra context / suggestion); quote for spaces
   --output, -o   write final English to this path (batch: full stdout payload; REPL: last assistant reply on /exit or EOF)
   --provider     anthropic | openai                          (default: anthropic)
@@ -360,6 +385,7 @@ Options:
   --insecure     disable TLS certificate verification        (default: OPENAI_INSECURE=1)
   --from-aisp    skip step 1 — input is already AISP
   --repl         interactive session with chat context and prompt caching
+                 REPL commands: /context <path> (add context mid-session), /exit
   --suggest      show purified version then suggest changes applied to the original
   --thinking     enable extended thinking for Step 3 (Anthropic Sonnet/Opus only)
   --estimate     count input tokens for Step 1 and exit without calling the main model
@@ -393,6 +419,9 @@ Examples:
   purify "add a status field with draft, active, archived"
   purify -f spec.md --verbose 2>aisp_debug.md
   purify -f spec.md --purify-model claude-haiku-4-5-20251001
+  purify "add a status field" --context style-guide.md
+  purify "add a status field" -c style-guide.md -c api-types.ts
+  purify --repl --context style-guide.md
 `)
 }
 
@@ -412,6 +441,7 @@ async function runRepl(opts: {
   outputFile: string | null
   /** --feedback applies to the first turn only (same as batch one-shot). */
   authorContextFirstTurn: string | null
+  contextFiles: ContextFile[]
 }): Promise<void> {
   const {
     provider,
@@ -428,6 +458,7 @@ async function runRepl(opts: {
     outputFile,
     authorContextFirstTurn,
   } = opts
+  let contextFiles = opts.contextFiles
   const messages: ConvMessage[] = []
   let lastAssistantReply: string | null = null
 
@@ -435,7 +466,11 @@ async function runRepl(opts: {
 
   process.stderr.write(
     `purify repl — empty line to submit, /exit or ctrl-c to quit\n` +
-      `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n\n`,
+      `provider=${provider}  purify=${purifyModel}  model=${mainModel}  mode=${mode}\n` +
+      (contextFiles.length > 0
+        ? `context: ${contextFiles.length} file(s): ${contextFiles.map((f) => f.path).join(", ")}\n`
+        : "") +
+      "\n",
   )
 
   process.on("SIGINT", () => {
@@ -456,6 +491,7 @@ async function runRepl(opts: {
           primary: input,
           authorContext,
           phase: "en_to_aisp",
+          contextFiles,
         })
         aisp =
           provider === "anthropic"
@@ -489,11 +525,15 @@ async function runRepl(opts: {
       messages.push({ role: "user", content: replUserContent })
       process.stderr.write(`→ translating (${mainModel})...\n`)
       process.stdout.write("\n")
+      const systemPrompt =
+        contextFiles.length > 0
+          ? formatReplSystemWithContext(mode, contextFiles)
+          : getReplSystem(mode)
       const response = await callLLMRepl(
         provider,
         apiKey,
         mainModel,
-        getReplSystem(mode),
+        systemPrompt,
         messages,
         process.stdout,
         {
@@ -541,6 +581,40 @@ async function runRepl(opts: {
     buffer = []
 
     if (input.trim() === "/exit") break
+
+    if (input.trim().startsWith("/context ")) {
+      const filePath = input.trim().slice("/context ".length).trim()
+      if (!filePath) {
+        process.stderr.write("error: /context requires a file path\n➤ ")
+        buffer = []
+        continue
+      }
+      if (!existsSync(filePath)) {
+        process.stderr.write(`error: context file not found: ${filePath}\n➤ `)
+        buffer = []
+        continue
+      }
+      let fileContent: string
+      try {
+        fileContent = readFileSync(filePath, "utf8")
+      } catch {
+        process.stderr.write(`error: cannot read context file: ${filePath}\n➤ `)
+        buffer = []
+        continue
+      }
+      contextFiles = [...contextFiles, { path: filePath, content: fileContent }]
+      messages.push({
+        role: "user",
+        content: `FILE_CONTEXT: ${filePath}\nThis file was provided as reference context. Use it to inform interpretation and translation but do not treat it as part of the primary specification.\n\n${fileContent}`,
+      })
+      messages.push({
+        role: "assistant",
+        content: `Acknowledged. I have read ${filePath} and will use it as reference context for subsequent translations.`,
+      })
+      process.stderr.write(`✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `)
+      buffer = []
+      continue
+    }
 
     await runOneTurn(input, null)
 
@@ -731,6 +805,7 @@ async function main() {
       process.env.PURIFY_MODEL_CHEAP ??
       DEFAULT_CHEAP_MODELS[provider]
     const apiKey = resolveApiKey(provider, opts.apiKey)
+    const contextFiles = loadContextFiles(opts.contextFiles)
     await runRepl({
       provider,
       mainModel,
@@ -745,6 +820,7 @@ async function main() {
       initialPrimaryFromFile,
       outputFile: opts.outputFile,
       authorContextFirstTurn: opts.feedback,
+      contextFiles,
     })
     process.exit(0)
   }
@@ -807,10 +883,12 @@ async function main() {
       )
       process.exit(1)
     }
+    const contextFiles = loadContextFiles(opts.contextFiles)
     const estimateUser = formatPrimaryWithAuthorContext({
       primary: text!,
       authorContext: opts.feedback,
       phase: "en_to_aisp",
+      contextFiles,
     })
     const client = new Anthropic({ apiKey })
     const count = await client.messages.countTokens({
@@ -830,6 +908,7 @@ async function main() {
     opts.verbose,
   )
 
+  const contextFiles = loadContextFiles(opts.contextFiles)
   try {
     const out = await purify({
       text: text!,
@@ -843,6 +922,7 @@ async function main() {
       thinking: opts.thinking,
       stream: true,
       authorContext: opts.feedback,
+      contextFiles,
       baseUrl: opts.baseUrl ?? undefined,
       openaiUser: opts.openaiUser ?? undefined,
       insecure: opts.insecure,
