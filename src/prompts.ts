@@ -196,12 +196,7 @@ export function formatPrimaryWithAuthorContext(args: {
       ? "The PRIMARY_SPECIFICATION block below is English source text to translate into AISP."
       : "The PRIMARY_SPECIFICATION block below is an AISP document to translate into English markdown."
 
-  const parts = [
-    "PRIMARY_SPECIFICATION",
-    primaryNote,
-    "",
-    args.primary,
-  ]
+  const parts = ["PRIMARY_SPECIFICATION", primaryNote, "", args.primary]
 
   if (ctx) {
     parts.push(
@@ -471,8 +466,13 @@ export function buildUpdateTurnContent(change: string): string {
 
 // PatchRequest content: changed section + optional hint
 // The full AISP is in the system prompt (cached); this is the user turn.
-export function buildPatchRequestContent(section: string, hint?: string): string {
-  const hintLine = hint ? `\nHINT (which part of the spec this belongs to): ${hint}` : ""
+export function buildPatchRequestContent(
+  section: string,
+  hint?: string,
+): string {
+  const hintLine = hint
+    ? `\nHINT (which part of the spec this belongs to): ${hint}`
+    : ""
   return (
     `The following section of the specification has changed.${hintLine}\n\n` +
     `Return only the AISP blocks that need to be updated. ` +
@@ -487,7 +487,10 @@ export function buildPatchRequestContent(section: string, hint?: string): string
 }
 
 // PatchTranslate content: translate only the changed blocks (full AISP is in system prompt)
-export function buildPatchTranslateContent(patchRaw: string, format: string): string {
+export function buildPatchTranslateContent(
+  patchRaw: string,
+  format: string,
+): string {
   return (
     `The following AISP blocks were updated. ` +
     `Translate only these blocks to natural language.\n\n` +

@@ -51,7 +51,11 @@ export interface Contradiction {
 
 export type ClarificationMode = "always" | "on_low_score" | "never"
 
-export type PipelineStatus = "ready" | "needs_clarification" | "has_contradictions" | "complete"
+export type PipelineStatus =
+  | "ready"
+  | "needs_clarification"
+  | "has_contradictions"
+  | "complete"
 
 export type GapSignal =
   | "low_delta"
