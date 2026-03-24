@@ -12,10 +12,10 @@ The round-trip invariant: `ambiguity(purify(p)) < ambiguity(p)` for every input 
 
 ## How it works
 
-1. **English → AISP** (cheap model): your input is translated into AISP 5.1 formal grammar, which forces every constraint into an explicit quantifier, every enumeration to be fully spelled out, and every negation to be explicit. Ambiguities that survive fluent English prose become visible here.
+1. **English → AISP**: your input is translated into AISP 5.1 formal grammar, which forces every constraint into an explicit quantifier, every enumeration to be fully spelled out, and every negation to be stated. Ambiguities that survive fluent prose become visible here.
 2. **Validate**: an independent WASM validator scores the AISP document (δ ∈ [0, 1]) and assigns a quality tier. The validator score is authoritative — LLM self-reported scores are never trusted.
-3. **Clarify** *(optional)*: if the score is below threshold, the model generates specific questions for the author. Answers are incorporated and the AISP is refined.
-4. **AISP → English** (main model): the formal document is translated back to plain English using the full conversation as context.
+3. **Clarify** *(optional)*: if the score is below threshold, the model generates specific questions for the author. Answers are incorporated and the AISP is refined. The model never hallucates answers on the author's behalf.
+4. **AISP → English**: the refined document is translated back to plain English using the full conversation as context.
 
 The purified output — not the AISP — is the deliverable.
 
