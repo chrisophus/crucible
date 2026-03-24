@@ -1,8 +1,10 @@
 # crucible
 
-**purify** — AISP round-trip spec purification.
+**purify** — remove AI slop from technical docs.
 
-A crucible purifies metal under heat by forcing impurities to the surface. This tool does the same for written specs: it routes your input through AISP 5.1 formal grammar and back to English, surfacing hidden ambiguity in the process.
+AI-assisted specs and requirements sound precise but often aren't. Fluent prose lets vague quantifiers, unstated assumptions, and contradictions slip through — and they stay hidden until someone tries to implement. "Should retry on failure" sounds complete; it isn't. Which failures? How many times? With what backoff?
+
+A crucible purifies metal under heat by forcing impurities to the surface. This tool does the same: it routes your text through AISP 5.1 formal grammar and back to plain English. The grammar has no tolerance for vagueness — every constraint must have an explicit quantifier, every negation must be stated, every enumeration must be complete. What survives the round-trip is unambiguous; what doesn't surfaces the problem before it becomes a bug.
 
 The round-trip invariant: `ambiguity(purify(p)) < ambiguity(p)` for every input `p`.
 
