@@ -27,7 +27,7 @@ The purified output — not the AISP — is the deliverable.
 |---------|----------|-------|
 | **CLI** | One-shot purification, scripts, shell pipelines | `npm install -g .` |
 | **MCP server** | AI-assisted iterative refinement with clarification loops | `purify-mcp` in PATH |
-| **`/purify-spec`** | Inline Claude Code command (no install required) | Copy skill file |
+| **`/purify`** | Inline Claude Code command (no install required) | Copy `claude/skills/purify/` into your project's `.claude/skills/` |
 
 **Upgrade path**: start with the CLI → add the MCP server when you want multi-round clarification loops → run `purify_init` once to generate project context for consistently higher-quality output.
 
