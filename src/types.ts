@@ -73,7 +73,7 @@ export interface Config {
 }
 
 export const DEFAULT_CONFIG: Config = {
-  clarification_mode: "on_low_score",
+  clarification_mode: "never",
   score_threshold: "◊",
   ask_on_contradiction: true,
   max_clarify_rounds: 2,

@@ -191,23 +191,20 @@ async function computeValidationResult(
   aisp: string,
   provider: Provider,
   apiKey: string,
-  mainModel: string,
+  cheapModel: string,
   llmOpts: { baseUrl?: string; openaiUser?: string; insecure?: boolean },
 ): Promise<PipelineValidationResult> {
-  const validatorResult = await runValidator(aisp)
   const selfReport = parseEvidence(aisp)
-  const delta = validatorResult?.delta ?? selfReport.delta ?? 0
   const phi = parsePhi(aisp)
+
+  const [validatorResult, contradictions] = await Promise.all([
+    runValidator(aisp),
+    detectContradictions(aisp, provider, apiKey, cheapModel, llmOpts),
+  ])
+
+  const delta = validatorResult?.delta ?? selfReport.delta ?? 0
   const tau = computeTier(delta, phi)
   const scores: Scores = { delta, phi, tau }
-
-  const contradictions = await detectContradictions(
-    aisp,
-    provider,
-    apiKey,
-    mainModel,
-    llmOpts,
-  )
   const gaps = computeGaps(validatorResult, scores)
 
   return { scores, contradictions, gaps }
@@ -257,7 +254,7 @@ async function generateQuestions(
   const raw = await callLLMRepl(
     resolved.provider,
     resolved.apiKey,
-    resolved.mainModel,
+    resolved.cheapModel,
     session.systemPrompt,
     session.messages,
     undefined,
@@ -336,7 +333,7 @@ async function incorporateAnswers(
   const refinedAisp = await callLLMRepl(
     resolved.provider,
     resolved.apiKey,
-    resolved.mainModel,
+    resolved.cheapModel,
     session.systemPrompt,
     session.messages,
     undefined,
@@ -440,7 +437,7 @@ export async function runPurifyPipeline(
     aisp,
     resolved.provider,
     resolved.apiKey,
-    resolved.mainModel,
+    resolved.cheapModel,
     { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
   )
 
@@ -480,7 +477,7 @@ export async function runClarifyPipeline(
     refinedAisp,
     resolved.provider,
     resolved.apiKey,
-    resolved.mainModel,
+    resolved.cheapModel,
     { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
   )
 
@@ -561,7 +558,7 @@ export async function runUpdatePipeline(
     updatedAisp,
     resolved.provider,
     resolved.apiKey,
-    resolved.mainModel,
+    resolved.cheapModel,
     { baseUrl: resolved.baseUrl, openaiUser: resolved.openaiUser, insecure: resolved.insecure },
   )
 
