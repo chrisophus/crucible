@@ -120,6 +120,18 @@ const TOOLS: Tool[] = [
               description:
                 "Minimum tier to proceed without clarification (default: ◊ silver)",
             },
+            contradiction_detection: {
+              type: "string",
+              enum: ["always", "on_low_score", "never"],
+              description:
+                "When to run LLM contradiction detection: always, on_low_score (default), or never",
+            },
+            external_validation: {
+              type: "string",
+              enum: ["always", "on_low_score", "never"],
+              description:
+                "When to run external WASM validator: always, on_low_score, or never (default)",
+            },
             ask_on_contradiction: {
               type: "boolean",
               description:
@@ -227,6 +239,14 @@ const TOOLS: Tool[] = [
             score_threshold: {
               type: "string",
               enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"],
+            },
+            contradiction_detection: {
+              type: "string",
+              enum: ["always", "on_low_score", "never"],
+            },
+            external_validation: {
+              type: "string",
+              enum: ["always", "on_low_score", "never"],
             },
             ask_on_contradiction: { type: "boolean" },
             max_clarify_rounds: { type: "number" },

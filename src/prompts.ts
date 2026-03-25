@@ -421,7 +421,10 @@ export function buildPurifyTurnContent(
     parts.push(`CONTEXT FILES\n\n${formatContextBlocks(contextFiles)}`)
   }
   parts.push(
-    `Translate the following to AISP 5.1. Output only the AISP document.\n\n${text}`,
+    `PRIMARY_SPECIFICATION\n\n${text}\n\nEND_PRIMARY_SPECIFICATION\n\n` +
+      `Translate the PRIMARY_SPECIFICATION block above to AISP 5.1. ` +
+      `Translate only that block — not any context files. ` +
+      `Output only the AISP document.`,
   )
   return parts.join("\n\n---\n\n")
 }
@@ -455,8 +458,9 @@ export function buildAnswersTurnContent(
 export function buildTranslateTurnContent(format: string): string {
   return (
     `${format}\n\n` +
-    `Now rewrite the original input using the AISP analysis above. ` +
-    `The output should read as an improved version of the original text — ` +
+    `Now rewrite the text from the PRIMARY_SPECIFICATION block (up to END_PRIMARY_SPECIFICATION) using the AISP analysis above. ` +
+    `Match the format and style of that block — not any context files. ` +
+    `The output should read as an improved version of the PRIMARY_SPECIFICATION — ` +
     `same scope and intent, but with gaps filled, contradictions resolved, ` +
     `and ambiguity removed. ` +
     `No hedge words (typically, usually, often, generally, might, may, could, probably). ` +

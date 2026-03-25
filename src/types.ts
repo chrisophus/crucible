@@ -50,6 +50,8 @@ export interface Contradiction {
 // ── V3: Session-based pipeline types ──────────────────────────────────────────
 
 export type ClarificationMode = "always" | "on_low_score" | "never"
+export type ContradictionDetection = "always" | "on_low_score" | "never"
+export type ExternalValidation = "always" | "on_low_score" | "never"
 
 export type PipelineStatus =
   | "ready"
@@ -71,6 +73,8 @@ export interface Gap {
 
 export interface Config {
   clarification_mode: ClarificationMode
+  contradiction_detection: ContradictionDetection
+  external_validation: ExternalValidation
   score_threshold: QualityTier
   ask_on_contradiction: boolean
   max_clarify_rounds: number
@@ -78,6 +82,8 @@ export interface Config {
 
 export const DEFAULT_CONFIG: Config = {
   clarification_mode: "never",
+  contradiction_detection: "on_low_score",
+  external_validation: "never",
   score_threshold: "◊",
   ask_on_contradiction: true,
   max_clarify_rounds: 2,
