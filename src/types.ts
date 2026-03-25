@@ -101,6 +101,7 @@ export interface Session {
   config: Config
   aisp_current: string | undefined
   round: number
+  contextFiles?: ContextFile[]
 }
 
 export interface PurifyRunResult {
