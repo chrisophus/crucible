@@ -414,12 +414,18 @@ export async function runPurifyPipeline(
     return {
       session_id: session.id,
       status: "has_contradictions",
+      aisp: session.aisp_current,
       contradictions,
       scores: validation.scores,
     }
   }
 
-  return { session_id: session.id, status: "ready", scores: validation.scores }
+  return {
+    session_id: session.id,
+    status: "ready",
+    aisp: session.aisp_current,
+    scores: validation.scores,
+  }
 }
 
 // purify_translate — runs Phase4, returns purified English
@@ -501,6 +507,7 @@ export async function runUpdatePipeline(
     return {
       session_id: newSession.id,
       status: "has_contradictions",
+      aisp: newSession.aisp_current,
       contradictions,
       scores: validation.scores,
     }
@@ -509,6 +516,7 @@ export async function runUpdatePipeline(
   return {
     session_id: newSession.id,
     status: "ready",
+    aisp: newSession.aisp_current,
     scores: validation.scores,
   }
 }

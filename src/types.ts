@@ -106,6 +106,7 @@ export interface PurifyRunResult {
   status: PipelineStatus
   contradictions?: Contradiction[]
   purified?: string
+  aisp?: string
   context_hint?: string
   scores?: Scores
 }

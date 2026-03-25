@@ -266,6 +266,7 @@ function parseArgs(argv: string[]) {
     inputFile: null as string | null,
     feedback: null as string | null,
     outputFile: null as string | null,
+    saveAisp: null as string | null,
     contextFiles: [] as string[],
   }
 
@@ -298,6 +299,13 @@ function parseArgs(argv: string[]) {
         process.exit(1)
       }
       opts.outputFile = p
+    } else if (a === "--save-aisp") {
+      const p = args[++i]
+      if (!p || p.startsWith("-")) {
+        process.stderr.write(`error: ${a} requires a file path\n`)
+        process.exit(1)
+      }
+      opts.saveAisp = p
     } else if (a === "--verbose") {
       opts.verbose = true
     } else if (a === "--debug") {
@@ -412,7 +420,8 @@ Options:
   --input, -f    read primary specification from this file path
   --context, -c  add a file as reference context (repeatable); e.g. -c style-guide.md -c api-types.ts
   --feedback     author context for one shot (clarifications / extra context); quote for spaces
-  --output, -o   write final English to this path (batch: full stdout payload; REPL: last reply on /exit or EOF)
+  --output, -o   write final English to this path
+  --save-aisp    write the generated AISP document to this path (batch: full stdout payload; REPL: last reply on /exit or EOF)
   --mode         formal|input|narrative|hybrid|sketch|summary (default: formal)
                  formal: translate the AISP to English
                  input:  match the style and format of the original input
@@ -1167,6 +1176,11 @@ async function main() {
     )
 
     process.stderr.write(`SESSION: ${result.session_id}\n`)
+
+    if (result.aisp && opts.saveAisp) {
+      writeFileSync(opts.saveAisp, result.aisp, "utf8")
+      process.stderr.write(`AISP saved to ${opts.saveAisp}\n`)
+    }
 
     if (result.scores) {
       process.stdout.write(`${formatQualityLine(result.scores)}\n---\n`)
