@@ -10,11 +10,9 @@
 
 import { readFileSync } from "node:fs"
 import {
-  buildAnswersTurnContent,
   buildPatchRequestContent,
   buildPatchTranslateContent,
   buildPurifyTurnContent,
-  buildQuestionRequestContent,
   buildTranslateTurnContent,
   buildUpdateTurnContent,
   CONTRADICTION_DETECTION_SYSTEM,
@@ -32,13 +30,13 @@ import type {
   Config,
   ContextFile,
   Contradiction,
+  ConvMessage,
   Gap,
   PatchResult,
   PipelineValidationResult,
   Provider,
   PurifyRunResult,
   QualityTier,
-  Question,
   Scores,
   Session,
   ValidatorResult,
@@ -53,6 +51,11 @@ const TIER_ORDER: Record<QualityTier, number> = {
   "◊": 2,
   "◊⁺": 3,
   "◊⁺⁺": 4,
+}
+
+/** Strip markdown code fences that models sometimes wrap AISP output in. */
+function stripFences(raw: string): string {
+  return raw.replace(/^```[^\n]*\n([\s\S]*?)```/gm, "$1").trim()
 }
 
 function tierBelow(a: QualityTier, b: QualityTier): boolean {
@@ -93,28 +96,6 @@ function computeGaps(
     gaps.push({ location: "document_structure", signal: "missing_block" })
   }
   return gaps
-}
-
-function formatValidationSummary(validation: PipelineValidationResult): string {
-  const lines = [
-    "Validation Result:",
-    `- Tier: ${validation.scores.tau}`,
-    `- Delta: ${validation.scores.delta.toFixed(3)}`,
-    `- Phi: ${validation.scores.phi}`,
-  ]
-  if (validation.contradictions.length > 0) {
-    lines.push("\nContradictions:")
-    for (const c of validation.contradictions) {
-      lines.push(`  - ${c.kind}: ${c.statement_a} | ${c.statement_b}`)
-    }
-  }
-  if (validation.gaps.length > 0) {
-    lines.push("\nGaps:")
-    for (const g of validation.gaps) {
-      lines.push(`  - ${g.signal} at ${g.location}`)
-    }
-  }
-  return lines.join("\n")
 }
 
 function resolveApiKey(provider: Provider): string {
@@ -179,7 +160,7 @@ function resolveOpts(opts: LLMOpts): ResolvedOpts {
 // ── Phase 2: External validator ────────────────────────────────────────────────
 
 async function detectContradictions(
-  aisp: string,
+  session: Session,
   provider: Provider,
   apiKey: string,
   model: string,
@@ -192,12 +173,21 @@ async function detectContradictions(
   },
 ): Promise<Contradiction[]> {
   try {
+    const messages: ConvMessage[] = [
+      ...session.messages,
+      {
+        role: "user",
+        content:
+          "Analyze the AISP document above for logical contradictions. " +
+          CONTRADICTION_DETECTION_SYSTEM,
+      },
+    ]
     const raw = await callLLMRepl(
       provider,
       apiKey,
       model,
-      CONTRADICTION_DETECTION_SYSTEM,
-      [{ role: "user", content: aisp }],
+      session.systemPrompt,
+      messages,
       undefined,
       llmOpts,
     )
@@ -209,7 +199,7 @@ async function detectContradictions(
 }
 
 async function computeValidationResult(
-  aisp: string,
+  session: Session,
   provider: Provider,
   apiKey: string,
   cheapModel: string,
@@ -224,6 +214,7 @@ async function computeValidationResult(
   externalValidation: import("./types.ts").ExternalValidation = "never",
   scoreThreshold: import("./types.ts").QualityTier = "◊",
 ): Promise<PipelineValidationResult> {
+  const aisp = session.aisp_current ?? ""
   const selfReport = parseEvidence(aisp)
   const phi = parsePhi(aisp)
 
@@ -245,7 +236,7 @@ async function computeValidationResult(
   let contradictions: Contradiction[] = []
   if (contradictionDetection === "always") {
     contradictions = await detectContradictions(
-      aisp,
+      session,
       provider,
       apiKey,
       cheapModel,
@@ -254,7 +245,7 @@ async function computeValidationResult(
   } else if (contradictionDetection === "on_low_score") {
     if (tierBelow(tau, scoreThreshold)) {
       contradictions = await detectContradictions(
-        aisp,
+        session,
         provider,
         apiKey,
         cheapModel,
@@ -311,166 +302,23 @@ async function runPhase1(
     },
   )
 
-  session.messages.push({ role: "assistant", content: aisp })
-  session.aisp_current = aisp
+  const cleanAisp = stripFences(aisp)
+  session.messages.push({ role: "assistant", content: cleanAisp })
+  session.aisp_current = cleanAisp
   saveSession(session)
-  return aisp
+  return cleanAisp
 }
 
-// ── Phase 3a: Generate questions (LLM) ────────────────────────────────────────
+// ── Phase 3: Contradiction check ──────────────────────────────────────────────
 
-async function generateQuestions(
-  session: Session,
+function checkContradictions(
   validation: PipelineValidationResult,
-  resolved: ResolvedOpts,
-): Promise<Question[]> {
-  const summary = formatValidationSummary(validation)
-  const userContent = buildQuestionRequestContent(summary)
-  session.messages.push({ role: "user", content: userContent })
-
-  const raw = await callLLMRepl(
-    resolved.provider,
-    resolved.apiKey,
-    resolved.cheapModel,
-    session.systemPrompt,
-    session.messages,
-    undefined,
-    {
-      baseUrl: resolved.baseUrl,
-      openaiUser: resolved.openaiUser,
-      insecure: resolved.insecure,
-      debug: resolved.debug,
-      veryVerbose: resolved.veryVerbose,
-    },
-  )
-
-  // Parse and validate questions from the model response. Fall back to a safe
-  // single optional question if parsing or validation fails.
-  let questions: Question[]
-  try {
-    const parsed = parseJSON<unknown>(raw)
-
-    const sanitizeQuestions = (value: unknown): Question[] | null => {
-      if (!Array.isArray(value)) return null
-
-      const allowedPriorities = new Set<string>(["MANDATORY", "OPTIONAL"])
-      const result: Question[] = []
-
-      for (const item of value) {
-        if (!item || typeof item !== "object") continue
-
-        const q: unknown = (item as any).question
-        const p: unknown = (item as any).priority
-
-        if (typeof q !== "string" || q.trim().length === 0) continue
-        if (typeof p !== "string" || !allowedPriorities.has(p)) continue
-
-        result.push({ question: q.trim(), priority: p as Question["priority"] })
-
-        if (result.length >= 7) break
-      }
-
-      return result.length > 0 ? result : null
-    }
-
-    const validated = sanitizeQuestions(parsed)
-    if (!validated) {
-      throw new Error("Invalid questions payload")
-    }
-
-    questions = validated
-  } catch {
-    questions = [
-      {
-        priority: "OPTIONAL",
-        question:
-          "Please provide any additional information or clarifications you think are missing from your previous answer.",
-      },
-    ]
-  }
-
-  session.messages.push({ role: "assistant", content: raw })
-  saveSession(session)
-  return questions
-}
-
-// ── Phase 3b: Incorporate answers (LLM refines AISP) ──────────────────────────
-
-async function incorporateAnswers(
-  session: Session,
-  answers: Array<{ question: string; answer: string }>,
-  resolved: ResolvedOpts,
-): Promise<string> {
-  const answersContent = buildAnswersTurnContent(answers)
-  const aispSnippet =
-    session.aisp_current && session.aisp_current.trim().length > 0
-      ? `\n\nHere is the current AISP document that you must update:\n\n${session.aisp_current}`
-      : ""
-  const userContent = `${answersContent}${aispSnippet}`
-  session.messages.push({ role: "user", content: userContent })
-
-  const refinedAisp = await callLLMRepl(
-    resolved.provider,
-    resolved.apiKey,
-    resolved.cheapModel,
-    session.systemPrompt,
-    session.messages,
-    undefined,
-    {
-      baseUrl: resolved.baseUrl,
-      openaiUser: resolved.openaiUser,
-      insecure: resolved.insecure,
-      debug: resolved.debug,
-      veryVerbose: resolved.veryVerbose,
-    },
-  )
-
-  session.messages.push({ role: "assistant", content: refinedAisp })
-  session.aisp_current = refinedAisp
-  session.round += 1
-  saveSession(session)
-  return refinedAisp
-}
-
-// ── Phase 3: Branch ────────────────────────────────────────────────────────────
-
-type Phase3Result =
-  | { action: "has_contradictions"; contradictions: Contradiction[] }
-  | { action: "needs_clarification"; questions: Question[] }
-  | { action: "proceed_to_phase4" }
-
-async function runPhase3(
-  session: Session,
-  validation: PipelineValidationResult,
-  resolved: ResolvedOpts,
-): Promise<Phase3Result> {
-  const { config } = session
-
-  // Contradictions take priority
+  config: Config,
+): Contradiction[] | null {
   if (validation.contradictions.length > 0 && config.ask_on_contradiction) {
-    return {
-      action: "has_contradictions",
-      contradictions: validation.contradictions,
-    }
+    return validation.contradictions
   }
-
-  // Below threshold — check clarification mode
-  if (tierBelow(validation.scores.tau, config.score_threshold)) {
-    if (config.clarification_mode === "never") {
-      return { action: "proceed_to_phase4" }
-    }
-    if (
-      (config.clarification_mode === "always" ||
-        config.clarification_mode === "on_low_score") &&
-      session.round < config.max_clarify_rounds
-    ) {
-      const questions = await generateQuestions(session, validation, resolved)
-      return { action: "needs_clarification", questions }
-    }
-  }
-
-  // At or above threshold, or max rounds reached
-  return { action: "proceed_to_phase4" }
+  return null
 }
 
 // ── Phase 4: Translate (AISP → English) ───────────────────────────────────────
@@ -521,7 +369,6 @@ export async function runPurifyPipeline(
     session.contextFiles = contextFiles
   }
 
-  let aisp: string
   if (fromAisp) {
     // Input is already AISP — seed session directly
     session.aisp_current = text
@@ -536,9 +383,8 @@ export async function runPurifyPipeline(
       { role: "assistant", content: text },
     )
     saveSession(session)
-    aisp = text
   } else {
-    aisp = await runPhase1(
+    await runPhase1(
       session,
       text,
       resolved,
@@ -547,7 +393,7 @@ export async function runPurifyPipeline(
   }
 
   const validation = await computeValidationResult(
-    aisp,
+    session,
     resolved.provider,
     resolved.apiKey,
     resolved.cheapModel,
@@ -563,73 +409,12 @@ export async function runPurifyPipeline(
     session.config.score_threshold,
   )
 
-  const phase3 = await runPhase3(session, validation, resolved)
-
-  if (phase3.action === "has_contradictions") {
+  const contradictions = checkContradictions(validation, session.config)
+  if (contradictions) {
     return {
       session_id: session.id,
       status: "has_contradictions",
-      contradictions: phase3.contradictions,
-      scores: validation.scores,
-    }
-  }
-
-  if (phase3.action === "needs_clarification") {
-    return {
-      session_id: session.id,
-      status: "needs_clarification",
-      questions: phase3.questions,
-      scores: validation.scores,
-    }
-  }
-
-  return { session_id: session.id, status: "ready", scores: validation.scores }
-}
-
-// purify_clarify — submits answers, re-runs Phase2→Phase3
-export async function runClarifyPipeline(
-  sessionId: string,
-  answers: Array<{ question: string; answer: string }>,
-  opts: LLMOpts,
-): Promise<PurifyRunResult> {
-  const session = getSession(sessionId)
-  const resolved = resolveOpts(opts)
-
-  const refinedAisp = await incorporateAnswers(session, answers, resolved)
-
-  const validation = await computeValidationResult(
-    refinedAisp,
-    resolved.provider,
-    resolved.apiKey,
-    resolved.cheapModel,
-    {
-      baseUrl: resolved.baseUrl,
-      openaiUser: resolved.openaiUser,
-      insecure: resolved.insecure,
-      debug: resolved.debug,
-      veryVerbose: resolved.veryVerbose,
-    },
-    session.config.contradiction_detection,
-    session.config.external_validation,
-    session.config.score_threshold,
-  )
-
-  const phase3 = await runPhase3(session, validation, resolved)
-
-  if (phase3.action === "has_contradictions") {
-    return {
-      session_id: session.id,
-      status: "has_contradictions",
-      contradictions: phase3.contradictions,
-      scores: validation.scores,
-    }
-  }
-
-  if (phase3.action === "needs_clarification") {
-    return {
-      session_id: session.id,
-      status: "needs_clarification",
-      questions: phase3.questions,
+      contradictions,
       scores: validation.scores,
     }
   }
@@ -686,12 +471,16 @@ export async function runUpdatePipeline(
     },
   )
 
-  newSession.messages.push({ role: "assistant" as const, content: updatedAisp })
-  newSession.aisp_current = updatedAisp
+  const cleanUpdatedAisp = stripFences(updatedAisp)
+  newSession.messages.push({
+    role: "assistant" as const,
+    content: cleanUpdatedAisp,
+  })
+  newSession.aisp_current = cleanUpdatedAisp
   saveSession(newSession)
 
   const validation = await computeValidationResult(
-    updatedAisp,
+    newSession,
     resolved.provider,
     resolved.apiKey,
     resolved.cheapModel,
@@ -707,22 +496,12 @@ export async function runUpdatePipeline(
     newSession.config.score_threshold,
   )
 
-  const phase3 = await runPhase3(newSession, validation, resolved)
-
-  if (phase3.action === "has_contradictions") {
+  const contradictions = checkContradictions(validation, newSession.config)
+  if (contradictions) {
     return {
       session_id: newSession.id,
       status: "has_contradictions",
-      contradictions: phase3.contradictions,
-      scores: validation.scores,
-    }
-  }
-
-  if (phase3.action === "needs_clarification") {
-    return {
-      session_id: newSession.id,
-      status: "needs_clarification",
-      questions: phase3.questions,
+      contradictions,
       scores: validation.scores,
     }
   }
@@ -837,9 +616,19 @@ export async function runPatchPipeline(
   // Phase 2: Splice (no LLM)
   const updatedAisp = spliceAispBlocks(session.aisp_current, blocks)
 
-  // Phase 3: Contradiction detection on full updated AISP
+  // Phase 3: Contradiction detection on full updated AISP.
+  // Build a temporary session snapshot with the updated AISP so
+  // detectContradictions can reference it from conversation history.
+  const patchSession: Session = {
+    ...session,
+    messages: [
+      ...session.messages,
+      { role: "assistant", content: updatedAisp },
+    ],
+    aisp_current: updatedAisp,
+  }
   const contradictions = await detectContradictions(
-    updatedAisp,
+    patchSession,
     resolved.provider,
     resolved.apiKey,
     resolved.cheapModel,
