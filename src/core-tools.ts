@@ -11,14 +11,12 @@
 import { readFileSync } from "node:fs"
 import {
   buildAnswersTurnContent,
-  buildContextTurnContent,
   buildPatchRequestContent,
   buildPatchTranslateContent,
   buildPurifyTurnContent,
   buildQuestionRequestContent,
   buildTranslateTurnContent,
   buildUpdateTurnContent,
-  CONTEXT_ACK,
   CONTRADICTION_DETECTION_SYSTEM,
   getSessionSystemPrompt,
   INIT_SYSTEM,
@@ -221,21 +219,12 @@ async function computeValidationResult(
   return { scores, contradictions, gaps }
 }
 
-// ── Context injection ─────────────────────────────────────────────────────────
-
-/** Append a context user+ack turn pair to the session — no LLM call. */
-function injectContextTurn(session: Session, files: ContextFile[]): void {
-  if (!files.length) return
-  session.messages.push(
-    { role: "user", content: buildContextTurnContent(files) },
-    { role: "assistant", content: CONTEXT_ACK },
-  )
-  saveSession(session)
-}
+// ── Context tracking ─────────────────────────────────────────────────────────
 
 /**
- * Add context files to an existing session as a conversation turn.
- * Use this for mid-session context additions (e.g. REPL /context command).
+ * Add context files to an existing session for use in subsequent turns.
+ * Context is stored on the session and merged into the next user turn,
+ * rather than injected as a synthetic conversation pair.
  */
 export function addContextToSession(
   sessionId: string,
@@ -243,7 +232,8 @@ export function addContextToSession(
 ): void {
   if (!files.length) return
   const session = getSession(sessionId)
-  injectContextTurn(session, files)
+  session.contextFiles = [...(session.contextFiles ?? []), ...files]
+  saveSession(session)
 }
 
 // ── Phase 1: Purify (English → AISP) ──────────────────────────────────────────
@@ -252,8 +242,9 @@ async function runPhase1(
   session: Session,
   text: string,
   resolved: ResolvedOpts,
+  contextFiles?: ContextFile[],
 ): Promise<string> {
-  const userContent = buildPurifyTurnContent(text)
+  const userContent = buildPurifyTurnContent(text, contextFiles)
   session.messages.push({ role: "user", content: userContent })
 
   const aisp = await callLLMRepl(
@@ -471,7 +462,7 @@ export async function runPurifyPipeline(
   const resolved = resolveOpts(opts)
   const session = createSession(getSessionSystemPrompt(), config)
   if (contextFiles.length > 0) {
-    injectContextTurn(session, contextFiles)
+    session.contextFiles = contextFiles
   }
 
   let aisp: string
@@ -479,13 +470,13 @@ export async function runPurifyPipeline(
     // Input is already AISP — seed session directly
     session.aisp_current = text
     session.messages.push(
-      { role: "user", content: text },
+      { role: "user", content: buildPurifyTurnContent(text, contextFiles.length > 0 ? contextFiles : undefined) },
       { role: "assistant", content: text },
     )
     saveSession(session)
     aisp = text
   } else {
-    aisp = await runPhase1(session, text, resolved)
+    aisp = await runPhase1(session, text, resolved, contextFiles.length > 0 ? contextFiles : undefined)
   }
 
   const validation = await computeValidationResult(

@@ -248,6 +248,7 @@ ${EXAMPLE_ENGLISH_OUTPUT}
 
 ${NEEDS_CLARIFICATION_BLOCK}
 
+Rewrite the original input using the AISP analysis. The output should read as an improved version of the original — same scope and intent, but with gaps filled, contradictions resolved, and ambiguity removed.
 Output only the markdown or the NEEDS_CLARIFICATION block. No preamble.`
 }
 
@@ -412,32 +413,32 @@ export function getSessionSystemPrompt(): string {
   return AISP_SPEC
 }
 
-// Synthetic assistant acknowledgement for context injection turns.
-export const CONTEXT_ACK =
-  "Understood. I have noted the domain context files. Ready to begin."
-
-// User-side content for a context injection turn.
-// Formats one FILE_CONTEXT block per file.
-export function buildContextTurnContent(files: ContextFile[]): string {
-  const blocks = files
+// Format context files into FILE_CONTEXT blocks.
+export function formatContextBlocks(files: ContextFile[]): string {
+  return files
     .map(
       (f) =>
         `FILE_CONTEXT: ${f.path}\n` +
-        `This file was provided as domain context. Use it to inform all interpretation, ` +
-        `translation, and clarification during this session. ` +
-        `Do not treat it as the primary specification to be purified.\n\n${f.content}`,
+        `This file is domain context — use it to inform interpretation, ` +
+        `translation, and clarification. ` +
+        `It is not the primary specification to be purified.\n\n${f.content}`,
     )
     .join("\n\n")
-  return (
-    `CONTEXT FILES\n\n` +
-    `The following files have been provided as domain context for this session.\n\n` +
-    blocks
-  )
 }
 
-// PurifyTurn content: instruction + raw text
-export function buildPurifyTurnContent(text: string): string {
-  return `Translate the following to AISP 5.1. Output only the AISP document.\n\n${text}`
+// PurifyTurn content: optional context + instruction + raw text, all in one turn.
+export function buildPurifyTurnContent(
+  text: string,
+  contextFiles?: ContextFile[],
+): string {
+  const parts: string[] = []
+  if (contextFiles && contextFiles.length > 0) {
+    parts.push(`CONTEXT FILES\n\n${formatContextBlocks(contextFiles)}`)
+  }
+  parts.push(
+    `Translate the following to AISP 5.1. Output only the AISP document.\n\n${text}`,
+  )
+  return parts.join("\n\n---\n\n")
 }
 
 // QuestionRequestTurn content: validation summary + question instruction
@@ -470,10 +471,13 @@ export function buildTranslateTurnContent(format: string): string {
   return (
     `${format}\n\n` +
     `${EXAMPLE_ENGLISH_OUTPUT}\n\n` +
-    `Translate the above AISP to natural language following the output format above. ` +
+    `Now rewrite the original input using the AISP analysis above. ` +
+    `The output should read as an improved version of the original text — ` +
+    `same scope and intent, but with gaps filled, contradictions resolved, ` +
+    `and ambiguity removed. ` +
     `No hedge words (typically, usually, often, generally, might, may, could, probably). ` +
     `No preamble. Start with the first section heading. ` +
-    `Output only the translated English text.`
+    `Output only the rewritten text.`
   )
 }
 
