@@ -1,0 +1,58 @@
+version: "2"
+
+run:
+  go: "1.24"
+
+linters:
+  default: all
+  disable:
+    - depguard
+    - ireturn
+    - varnamelen
+    - wrapcheck
+    - exhaustruct
+    - nlreturn
+    - wsl
+    - godox
+    - tagliatelle
+    - nonamedreturns
+    - mnd
+    - gochecknoglobals
+    - forbidigo
+    - noinlineerr
+    - testpackage
+    - err113
+    - wsl_v5
+
+  settings:
+    funlen:
+      lines: 50
+      statements: 40
+    cyclop:
+      max-complexity: 12
+    lll:
+      line-length: 170
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/chrisophus/crucible)
+    revive:
+      rules:
+        - name: var-naming
+          disabled: true
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - funlen
+          - errchkjson
+    paths:
+      - dist
+      - node_modules
+      - src
+
+formatters:
+  enable:
+    - gci
