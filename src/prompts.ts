@@ -226,25 +226,10 @@ export function formatPrimaryWithAuthorContext(args: {
   return parts.join("\n")
 }
 
-export const EXAMPLE_ENGLISH_OUTPUT = `\
-EXAMPLE OUTPUT:
-
-## How the notification system works
-
-The notification system delivers messages to users through three channels: email, push, and in-app. Every notification belongs to exactly one channel — there is no cross-posting or duplication.
-
-Whenever a new event fires, the router checks the user's channel preference and queues the message accordingly. If no preference is set, the system defaults to in-app, which means users always receive their notifications somewhere even if they never touch their settings.
-
-Messages that fail to deliver are retried up to three times with a one-minute delay between attempts. After the third failure the message is moved to a dead-letter queue and an alert is sent to the ops team. The system never silently drops a message.
-
-END EXAMPLE`
-
 export function getToEnglishSystem(mode: Mode): string {
   return `Translate this AISP to English.
 
 ${MODE_INSTRUCTIONS[mode]}
-
-${EXAMPLE_ENGLISH_OUTPUT}
 
 ${NEEDS_CLARIFICATION_BLOCK}
 
@@ -470,7 +455,6 @@ export function buildAnswersTurnContent(
 export function buildTranslateTurnContent(format: string): string {
   return (
     `${format}\n\n` +
-    `${EXAMPLE_ENGLISH_OUTPUT}\n\n` +
     `Now rewrite the original input using the AISP analysis above. ` +
     `The output should read as an improved version of the original text — ` +
     `same scope and intent, but with gaps filled, contradictions resolved, ` +
