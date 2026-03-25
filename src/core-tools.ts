@@ -136,6 +136,8 @@ interface LLMOpts {
   baseUrl?: string
   openaiUser?: string
   insecure?: boolean
+  debug?: boolean
+  veryVerbose?: boolean
 }
 
 interface ResolvedOpts {
@@ -146,6 +148,8 @@ interface ResolvedOpts {
   baseUrl?: string
   openaiUser?: string
   insecure?: boolean
+  debug?: boolean
+  veryVerbose?: boolean
 }
 
 function resolveOpts(opts: LLMOpts): ResolvedOpts {
@@ -167,6 +171,8 @@ function resolveOpts(opts: LLMOpts): ResolvedOpts {
     baseUrl: opts.baseUrl,
     openaiUser: opts.openaiUser,
     insecure: opts.insecure,
+    debug: opts.debug,
+    veryVerbose: opts.veryVerbose,
   }
 }
 
@@ -177,7 +183,13 @@ async function detectContradictions(
   provider: Provider,
   apiKey: string,
   model: string,
-  llmOpts: { baseUrl?: string; openaiUser?: string; insecure?: boolean },
+  llmOpts: {
+    baseUrl?: string
+    openaiUser?: string
+    insecure?: boolean
+    debug?: boolean
+    veryVerbose?: boolean
+  },
 ): Promise<Contradiction[]> {
   try {
     const raw = await callLLMRepl(
@@ -201,7 +213,13 @@ async function computeValidationResult(
   provider: Provider,
   apiKey: string,
   cheapModel: string,
-  llmOpts: { baseUrl?: string; openaiUser?: string; insecure?: boolean },
+  llmOpts: {
+    baseUrl?: string
+    openaiUser?: string
+    insecure?: boolean
+    debug?: boolean
+    veryVerbose?: boolean
+  },
 ): Promise<PipelineValidationResult> {
   const selfReport = parseEvidence(aisp)
   const phi = parsePhi(aisp)
@@ -258,6 +276,8 @@ async function runPhase1(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -289,6 +309,8 @@ async function generateQuestions(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -368,6 +390,8 @@ async function incorporateAnswers(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -441,6 +465,8 @@ async function runPhase4(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -470,13 +496,24 @@ export async function runPurifyPipeline(
     // Input is already AISP — seed session directly
     session.aisp_current = text
     session.messages.push(
-      { role: "user", content: buildPurifyTurnContent(text, contextFiles.length > 0 ? contextFiles : undefined) },
+      {
+        role: "user",
+        content: buildPurifyTurnContent(
+          text,
+          contextFiles.length > 0 ? contextFiles : undefined,
+        ),
+      },
       { role: "assistant", content: text },
     )
     saveSession(session)
     aisp = text
   } else {
-    aisp = await runPhase1(session, text, resolved, contextFiles.length > 0 ? contextFiles : undefined)
+    aisp = await runPhase1(
+      session,
+      text,
+      resolved,
+      contextFiles.length > 0 ? contextFiles : undefined,
+    )
   }
 
   const validation = await computeValidationResult(
@@ -488,6 +525,8 @@ export async function runPurifyPipeline(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -534,6 +573,8 @@ export async function runClarifyPipeline(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -604,6 +645,8 @@ export async function runUpdatePipeline(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -620,6 +663,8 @@ export async function runUpdatePipeline(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
@@ -726,6 +771,8 @@ export async function runPatchPipeline(
     baseUrl: resolved.baseUrl,
     openaiUser: resolved.openaiUser,
     insecure: resolved.insecure,
+    debug: resolved.debug,
+    veryVerbose: resolved.veryVerbose,
   }
 
   // Phase 1: Generate patch (cheapModel)
@@ -838,6 +885,8 @@ export async function initContext(
       baseUrl: resolved.baseUrl,
       openaiUser: resolved.openaiUser,
       insecure: resolved.insecure,
+      debug: resolved.debug,
+      veryVerbose: resolved.veryVerbose,
     },
   )
 
