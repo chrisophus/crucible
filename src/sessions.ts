@@ -19,7 +19,6 @@ export function createSession(systemPrompt: string, config: Config): Session {
     messages: [],
     config,
     aisp_current: undefined,
-    round: 0,
   }
   store.set(session.id, { session, lastActive: Date.now() })
   return session

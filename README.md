@@ -13,9 +13,8 @@ The round-trip invariant: `ambiguity(purify(p)) < ambiguity(p)` for every input 
 ## How it works
 
 1. **English → AISP**: your input is translated into AISP 5.1 formal grammar, which forces every constraint into an explicit quantifier, every enumeration to be fully spelled out, and every negation to be stated. Ambiguities that survive fluent prose become visible here.
-2. **Score**: the AISP document is scored for semantic density (δ ∈ [0, 1]) and assigned a quality tier. By default the LLM's self-reported scores are used. Pass `--validate` to run the external WASM validator instead, or `--validate` with `on_low_score` to use it only as a fallback when the self-reported score is low.
-3. **Clarify** *(optional)*: if the score is below threshold, the model generates specific questions for the author. Answers are incorporated and the AISP is refined. The model never hallucates answers on the author's behalf.
-4. **AISP → English**: the refined document is translated back to plain English using the full conversation as context.
+2. **Score**: the AISP document is scored for semantic density (δ ∈ [0, 1]) and assigned a quality tier. By default the LLM's self-reported scores are used. Pass `--validate` to run the external WASM validator, or `on_low_score` to use it only as a fallback.
+3. **AISP → English**: the document is translated back to plain English using the full conversation as context.
 
 The purified output — not the AISP — is the deliverable.
 
@@ -26,10 +25,8 @@ The purified output — not the AISP — is the deliverable.
 | Surface | Best for | Setup |
 |---------|----------|-------|
 | **CLI** | One-shot purification, scripts, shell pipelines | `npm install -g .` |
-| **MCP server** | AI-assisted iterative refinement with clarification loops | `purify-mcp` in PATH |
+| **MCP server** | AI-assisted iterative refinement | `purify-mcp` in PATH |
 | **`/purify`** | Inline Claude Code command (no install required) | Copy `claude/skills/purify/` into your project's `.claude/skills/` |
-
-**Upgrade path**: start with the CLI → add the MCP server when you want multi-round clarification loops → run `purify_init` once to generate project context for consistently higher-quality output.
 
 ---
 
@@ -41,7 +38,7 @@ cd crucible
 npm install -g .
 ```
 
-Requires Node.js.
+Requires Node.js ≥ 20.19.
 
 ---
 
@@ -80,9 +77,9 @@ Run `purify-mcp --help` for full configuration instructions.
 
 ---
 
-## MCP Tools (v3 session-based pipeline)
+## MCP Tools
 
-Five tools implement the session pipeline. Sessions accumulate conversation for prompt caching and context continuity.
+Four tools implement the session pipeline. Sessions accumulate conversation for prompt caching and context continuity.
 
 ### `purify_run` — start a session
 
@@ -91,7 +88,6 @@ Five tools implement the session pipeline. Sessions accumulate conversation for 
   "text": "The retry logic should back off exponentially...",
   "context": "<contents of purify.context.md>",
   "config": {
-    "clarification_mode": "on_low_score",
     "contradiction_detection": "on_low_score",
     "external_validation": "never",
     "score_threshold": "◊"
@@ -101,26 +97,12 @@ Five tools implement the session pipeline. Sessions accumulate conversation for 
 
 Returns:
 - `status=ready` → call `purify_translate`
-- `status=needs_clarification` + `questions` → collect answers, call `purify_clarify`
 - `status=has_contradictions` + `contradictions` → surface to author, resubmit
-
-### `purify_clarify` — submit answers
-
-```json
-{
-  "session_id": "...",
-  "answers": [
-    { "question": "Should retries apply to all error types?", "answer": "Only 5xx errors" }
-  ]
-}
-```
-
-Returns the same status variants as `purify_run`.
 
 ### `purify_translate` — get purified English
 
 ```json
-{ "session_id": "...", "format": "preserve input format" }
+{ "session_id": "...", "format": "narrative" }
 ```
 
 Returns `{ "purified": "...", "session_id": "..." }`.
@@ -136,6 +118,14 @@ Returns `{ "purified": "...", "session_id": "..." }`.
 
 Seeds a new session from the previous conversation and re-runs the pipeline.
 
+### `purify_patch` — patch a single section
+
+```json
+{ "session_id": "...", "section": "<changed section text>" }
+```
+
+Sends only the changed section as new tokens. The full AISP is in the system prompt and is prompt-cached. Returns a section-level English snippet without re-running the full pipeline.
+
 ### `purify_init` — generate purify.context.md
 
 ```json
@@ -148,35 +138,34 @@ Returns `{ "context_file": "...", "summary": "..." }`. Save `context_file` as `p
 
 ## Agent workflow
 
-When purifying a spec the agent follows this flow:
-
 ```
 1. Load purify.context.md (warn once if absent)
 2. purify_run({text, context}) → result
 3. If has_contradictions: surface to author, resolve, resubmit
-4. If needs_clarification: show questions, collect answers, purify_clarify → goto 3
-5. If ready: purify_translate({session_id, format}) → purified
-6. Use purified as the working document
+4. If ready: purify_translate({session_id, format}) → purified
+5. Use purified as the working document
 ```
 
 ---
 
-## CLI Output modes
+## Output modes
 
 All modes produce plain English — no AISP notation appears in any output.
 
-| Mode | Style | Audience |
-|------|-------|----------|
-| `narrative` | Flowing connected prose (default) | Developer / student |
-| `formal` | Tables, numbered steps, grouped bullets | Expert / spec consumer |
-| `hybrid` | Prose intro per section + structured list | Technical reader |
-| `sketch` | Overview paragraph + bullet list | Team overview |
-| `summary` | Short paragraph + bullets + takeaways | Non-technical audience |
+| Mode | Output style |
+|------|-------------|
+| `formal` | Translate the AISP to English (default) |
+| `input` | Match the style and format of the original input |
+| `narrative` | Flowing connected prose |
+| `hybrid` | Prose intro per section + tables or lists for detail |
+| `sketch` | Overview paragraph + bullet list of key points |
+| `summary` | Short paragraph + bullet takeaways |
 
 ```bash
-purify --summary "add a retry mechanism with exponential backoff"
-purify --formal spec.md
-purify --mode sketch requirements.txt
+purify --summary -f spec.md
+purify --narrative -f spec.md
+purify --mode input -f spec.md
+purify --mode sketch "add a retry mechanism with exponential backoff"
 ```
 
 ---
@@ -189,7 +178,7 @@ purify --mode sketch requirements.txt
 | ◊⁺ | gold | [0.60, 0.75) | High semantic density |
 | ◊ | silver | [0.40, 0.60) | Moderate semantic density |
 | ◊⁻ | bronze | [0.20, 0.40) | Low semantic density |
-| ⊘ | invalid | < 0.20 | Too thin or contradictory — clarification needed |
+| ⊘ | invalid | < 0.20 | Too thin or contradictory |
 
 CLI output format:
 
@@ -205,12 +194,13 @@ QUALITY: ◊⁺⁺ platinum (δ=0.85, φ=88)
 
 ```
 --repl           interactive session with prompt caching
+                 REPL commands: /context <path>  /patch  /exit
 --suggest        show purified version then suggest changes to the original
 --input, -f      read specification from file
 --context, -c    add reference context file (repeatable)
 --feedback       one-shot author context; quote for spaces
 --output, -o     write final English to file
---mode           formal|narrative|hybrid|sketch|summary  (default: narrative)
+--mode           formal|input|narrative|hybrid|sketch|summary  (default: formal)
 --formal / --narrative / --hybrid / --sketch / --summary  shorthand mode flags
 --provider       anthropic | openai               (default: anthropic)
 --model          main model (AISP → English)      (default: claude-sonnet-4-6)
@@ -218,7 +208,7 @@ QUALITY: ◊⁺⁺ platinum (δ=0.85, φ=88)
 --api-key        API key                          (default: env var)
 --from-aisp      skip step 1 — input is already AISP
 --contradictions    always run LLM contradiction detection (slower, more thorough)
---no-contradictions skip contradiction detection entirely (fastest)
+--no-contradictions skip contradiction detection entirely
                     default: run only when score is below threshold
 --validate          always run external WASM validator for scoring
 --no-validate       skip external validator; use LLM self-reported scores only (default)

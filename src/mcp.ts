@@ -67,7 +67,6 @@ import {
 
 import {
   initContext,
-  runClarifyPipeline,
   runPatchPipeline,
   runPurifyPipeline,
   runTranslatePipeline,
@@ -102,23 +101,12 @@ const TOOLS: Tool[] = [
         },
         config: {
           type: "object",
-          description:
-            "Optional pipeline configuration. Defaults: on_low_score / ◊ / true / 2",
+          description: "Optional pipeline configuration",
           properties: {
-            clarification_mode: {
-              type: "string",
-              enum: ["always", "on_low_score", "never"],
-              description:
-                "When to generate clarifying questions. " +
-                "on_low_score: only when below threshold (default). " +
-                "always: whenever below threshold regardless of round. " +
-                "never: proceed directly to translate.",
-            },
             score_threshold: {
               type: "string",
               enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"],
-              description:
-                "Minimum tier to proceed without clarification (default: ◊ silver)",
+              description: "Minimum quality tier (default: ◊ silver)",
             },
             contradiction_detection: {
               type: "string",
@@ -137,11 +125,6 @@ const TOOLS: Tool[] = [
               description:
                 "If true, return has_contradictions instead of proceeding (default: true)",
             },
-            max_clarify_rounds: {
-              type: "number",
-              description:
-                "Maximum clarification rounds before proceeding (default: 2)",
-            },
           },
         },
       },
@@ -149,45 +132,10 @@ const TOOLS: Tool[] = [
     },
   },
   {
-    name: "purify_clarify",
-    description:
-      "Step 2 (conditional). Submit answers to clarifying questions and re-run validation. " +
-      "Call this after purify_run or purify_clarify returns status=needs_clarification. " +
-      "The session conversation is updated with answers and a refined AISP. " +
-      "Returns the same status variants as purify_run. " +
-      "When status=ready, call purify_translate to get the final purified English.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        session_id: {
-          type: "string",
-          description:
-            "Session ID from the prior purify_run or purify_clarify call",
-        },
-        answers: {
-          type: "array",
-          description: "Answers to the clarifying questions",
-          items: {
-            type: "object",
-            properties: {
-              question: {
-                type: "string",
-                description: "The clarifying question",
-              },
-              answer: { type: "string", description: "The author's answer" },
-            },
-            required: ["question", "answer"],
-          },
-        },
-      },
-      required: ["session_id", "answers"],
-    },
-  },
-  {
     name: "purify_translate",
     description:
-      "Step 3. Translate the purified AISP to natural language. " +
-      "Call this when purify_run or purify_clarify returns status=ready. " +
+      "Step 2. Translate the purified AISP to natural language. " +
+      "Call this when purify_run returns status=ready. " +
       "Uses the full accumulated session conversation as context for faithful translation. " +
       "Returns the purified English text.",
     inputSchema: {
@@ -232,10 +180,6 @@ const TOOLS: Tool[] = [
           type: "object",
           description: "Optional pipeline configuration for the new session",
           properties: {
-            clarification_mode: {
-              type: "string",
-              enum: ["always", "on_low_score", "never"],
-            },
             score_threshold: {
               type: "string",
               enum: ["◊⁺⁺", "◊⁺", "◊", "◊⁻", "⊘"],
@@ -249,7 +193,6 @@ const TOOLS: Tool[] = [
               enum: ["always", "on_low_score", "never"],
             },
             ask_on_contradiction: { type: "boolean" },
-            max_clarify_rounds: { type: "number" },
           },
         },
       },
@@ -347,17 +290,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           "No context provided. Run purify_init on your project files once to generate purify.context.md, " +
           "then pass its contents as the context parameter for higher-quality output."
       }
-      return {
-        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-      }
-    }
-
-    if (name === "purify_clarify") {
-      const { session_id, answers } = args as {
-        session_id: string
-        answers: Array<{ question: string; answer: string }>
-      }
-      const result = await runClarifyPipeline(session_id, answers, {})
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       }

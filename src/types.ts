@@ -1,5 +1,11 @@
 export type Provider = "anthropic" | "openai"
-export type Mode = "formal" | "narrative" | "hybrid" | "sketch" | "summary"
+export type Mode =
+  | "input"
+  | "formal"
+  | "narrative"
+  | "hybrid"
+  | "sketch"
+  | "summary"
 export type ConvMessage = { role: "user" | "assistant"; content: string }
 
 export interface ContextFile {
@@ -49,15 +55,10 @@ export interface Contradiction {
 
 // ── V3: Session-based pipeline types ──────────────────────────────────────────
 
-export type ClarificationMode = "always" | "on_low_score" | "never"
 export type ContradictionDetection = "always" | "on_low_score" | "never"
 export type ExternalValidation = "always" | "on_low_score" | "never"
 
-export type PipelineStatus =
-  | "ready"
-  | "needs_clarification"
-  | "has_contradictions"
-  | "complete"
+export type PipelineStatus = "ready" | "has_contradictions" | "complete"
 
 export type GapSignal =
   | "low_delta"
@@ -72,26 +73,17 @@ export interface Gap {
 }
 
 export interface Config {
-  clarification_mode: ClarificationMode
   contradiction_detection: ContradictionDetection
   external_validation: ExternalValidation
   score_threshold: QualityTier
   ask_on_contradiction: boolean
-  max_clarify_rounds: number
 }
 
 export const DEFAULT_CONFIG: Config = {
-  clarification_mode: "never",
   contradiction_detection: "on_low_score",
   external_validation: "never",
   score_threshold: "◊",
   ask_on_contradiction: true,
-  max_clarify_rounds: 2,
-}
-
-export interface Question {
-  priority: "REQUIRED" | "OPTIONAL"
-  question: string
 }
 
 export interface PipelineValidationResult {
@@ -106,14 +98,12 @@ export interface Session {
   messages: ConvMessage[]
   config: Config
   aisp_current: string | undefined
-  round: number
   contextFiles?: ContextFile[]
 }
 
 export interface PurifyRunResult {
   session_id: string
   status: PipelineStatus
-  questions?: Question[]
   contradictions?: Contradiction[]
   purified?: string
   context_hint?: string
@@ -133,31 +123,6 @@ export interface PatchResult {
   aisp_patch?: AispBlock[]
   purified_section?: string
   contradictions?: Contradiction[]
-}
-
-// ── Legacy types used by CLI pipeline ─────────────────────────────────────────
-
-export type ClarificationPriority = "REQUIRED" | "OPTIONAL"
-export type ClarificationSource =
-  | "low_delta"
-  | "low_phi"
-  | "contradiction"
-  | "unreachable_state"
-  | "conflicting_authority"
-
-export interface Clarification {
-  priority: ClarificationPriority
-  question: string
-  source: ClarificationSource
-  field?: string
-}
-
-export interface TranslationResult {
-  aisp: string
-  purified: string | null
-  scores: Scores
-  contradictions: Contradiction[]
-  clarifications: Clarification[]
 }
 
 export interface ReflectionResult {

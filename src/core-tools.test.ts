@@ -4,11 +4,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import {
-  runClarifyPipeline,
-  runPurifyPipeline,
-  runTranslatePipeline,
-} from "./core-tools.ts"
+import { runPurifyPipeline, runTranslatePipeline } from "./core-tools.ts"
 import { getSession } from "./sessions.ts"
 import { DEFAULT_CONFIG } from "./types.ts"
 
@@ -58,16 +54,7 @@ const LLM_OPTS = {
 
 const NEVER_CONFIG = {
   ...DEFAULT_CONFIG,
-  clarification_mode: "never" as const,
   ask_on_contradiction: false,
-  max_clarify_rounds: 0,
-}
-
-const ON_LOW_SCORE_CONFIG = {
-  ...DEFAULT_CONFIG,
-  clarification_mode: "on_low_score" as const,
-  ask_on_contradiction: true,
-  max_clarify_rounds: 2,
 }
 
 beforeEach(() => {
@@ -144,7 +131,7 @@ describe("runPurifyPipeline", () => {
     mockCallLLM.mockImplementation(async (_p, _k, _m, _sys, messages) => {
       const lastMsg = messages[messages.length - 1]
       const content = typeof lastMsg.content === "string" ? lastMsg.content : ""
-      if (content === FAKE_AISP) {
+      if (content.includes("Analyze the AISP document above")) {
         return JSON.stringify({ contradictions: [contradiction] })
       }
       return FAKE_AISP
@@ -164,44 +151,6 @@ describe("runPurifyPipeline", () => {
     expect(result.status).toBe("has_contradictions")
     expect(result.contradictions).toHaveLength(1)
     expect(result.contradictions?.[0].kind).toBe("unsatisfiable_conjunction")
-  })
-
-  it("returns needs_clarification when score is low and mode is on_low_score", async () => {
-    // Return a low self-reported score so contradiction detection and clarification fire
-    mockParseEvidence.mockReturnValue({
-      delta: 0.15,
-      tierSymbol: "⊘",
-      tierName: "invalid",
-    })
-
-    const questions = [
-      { priority: "OPTIONAL", question: "What is the retry limit?" },
-    ]
-
-    mockCallLLM.mockImplementation(async (_p, _k, _m, _sys, messages) => {
-      const lastMsg = messages[messages.length - 1]
-      const content = typeof lastMsg.content === "string" ? lastMsg.content : ""
-      if (content.includes("contradiction")) {
-        return JSON.stringify({ contradictions: [] })
-      }
-      if (content.includes("question") || content.includes("clarif")) {
-        return JSON.stringify(questions)
-      }
-      return FAKE_AISP
-    })
-
-    const result = await runPurifyPipeline(
-      "The system should retry.",
-      [],
-      {
-        ...ON_LOW_SCORE_CONFIG,
-        contradiction_detection: "on_low_score" as const,
-      },
-      LLM_OPTS,
-    )
-
-    expect(result.status).toBe("needs_clarification")
-    expect(result.questions).toBeDefined()
   })
 
   it("skips Phase 1 when fromAisp=true", async () => {
@@ -268,27 +217,6 @@ describe("runTranslatePipeline", () => {
     const allCalls = mockCallLLM.mock.calls
     const lastCall = allCalls[allCalls.length - 1]
     expect(lastCall[5]).toBe(fakeStream) // 6th arg is streamTo
-  })
-})
-
-describe("runClarifyPipeline", () => {
-  it("returns status=ready after answers are incorporated", async () => {
-    const run = await runPurifyPipeline(
-      "The system shall retry.",
-      [],
-      NEVER_CONFIG,
-      LLM_OPTS,
-    )
-    expect(run.status).toBe("ready")
-
-    const clarifyResult = await runClarifyPipeline(
-      run.session_id,
-      [{ question: "How many retries?", answer: "Three retries maximum." }],
-      LLM_OPTS,
-    )
-
-    expect(clarifyResult.status).toBe("ready")
-    expect(clarifyResult.scores).toBeDefined()
   })
 })
 

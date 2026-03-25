@@ -93,76 +93,14 @@ ${AISP_SPEC}
 
 Translate the following to AISP. Output only the AISP document.`
 
-export const NEEDS_CLARIFICATION_BLOCK = `\
-IF τ is ⊘:
-  Do not translate. Output exactly:
-
-  NEEDS_CLARIFICATION
-  Before I can act on this I need answers to the following:
-  1. <specific answerable question from first ;; AMBIGUOUS comment>
-  2. <specific answerable question from second ambiguity>
-  ...
-
-  Keep questions specific. Binary or multiple-choice where possible.
-  No open-ended questions. No more than 7 questions.`
-
 export const MODE_INSTRUCTIONS: Record<Mode, string> = {
-  formal: `\
-IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to thorough, structured English markdown. No AISP notation in output.
-  - Invariants → declarative statements. Negations as "never" or "must not".
-  - Types → definition tables with every value listed explicitly.
-  - Entities → field tables: Field | Type | Notes. Nullable fields noted.
-  - Functions → per-case tables or numbered steps covering every case.
-  - Constraints → grouped bullets. Negations as "never", "must not".
-  - Preserve all code blocks exactly.
-  - Do not add rationale not in the source.
-  - No hedge words: never use "typically", "usually", "often", "generally".
-  - No preamble. Start with the first section heading.`,
-
-  narrative: `\
-IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to plain conversational prose — the kind a thoughtful teammate would write when explaining something to another person. No AISP notation in output.
-  - Do NOT use AISP section names as headings (not "Types", "Rules", "Functions", "Errors", "Evidence", "Meta"). Choose headings that describe what the content means to a reader.
-  - Omit the Evidence block entirely.
-  - Write a short opening paragraph explaining what this is and what it does.
-  - Group related ideas together naturally. Use the section structure as a guide, not a template to copy.
-  - Describe functions and processes in terms of what happens and why, not as named signatures. Do not list function names unless they are meaningful to the reader.
-  - For errors and edge cases, a short prose paragraph is better than a table.
-  - Use connective language: "whenever", "which means", "so that", "in other words".
-  - Preserve code examples that illustrate concrete values (e.g. example payee strings). Omit code that is just formal notation restated in a different syntax.
-  - Do not add rationale not in the source.
-  - No hedge words: never use "typically", "usually", "often", "generally".
-  - No preamble. Start with the first heading.`,
-
-  hybrid: `\
-IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to a mix of prose and structured markdown. No AISP notation in output.
-  - Open each section with one or two plain-English sentences stating the intent.
-  - Follow with a table, numbered list, or bullet list for the details.
-  - Preserve all code blocks exactly.
-  - Do not add rationale not in the source.
-  - No hedge words: never use "typically", "usually", "often", "generally".
-  - No preamble. Start with the first section heading.`,
-
-  sketch: `\
-IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to a high-level prose sketch. No AISP notation in output.
-  - Write a short overview paragraph for the whole document.
-  - Render each major point as a single clear sentence.
-  - Collect the key points into a bullet list.
-  - Omit minor technical detail; keep the meaning intact.
-  - Render code examples as plain pseudocode or a prose description.
-  - Close with a one-sentence confidence statement.`,
-
-  summary: `\
-IF τ is ◊⁺⁺, ◊⁺, ◊, or ◊⁻:
-  Translate to a brief plain-English executive summary. No AISP notation in output.
-  - Write a short paragraph summarising what this specification does.
-  - Follow with a bullet list of the key points. No tables.
-  - List two or three key takeaways.
-  - State overall confidence in one plain sentence.
-  - No code blocks. Describe what code examples do in plain words.`,
+  formal: "",
+  input: "in the same style and format as the input",
+  narrative: "as a narrative",
+  hybrid:
+    "as a narrative with supporting tables or lists for structured detail",
+  sketch: "as a sketch",
+  summary: "as a summary",
 }
 
 export const APPLY_SUGGESTION_SYSTEM = `\
@@ -227,14 +165,10 @@ export function formatPrimaryWithAuthorContext(args: {
 }
 
 export function getToEnglishSystem(mode: Mode): string {
-  return `Translate this AISP to English.
-
-${MODE_INSTRUCTIONS[mode]}
-
-${NEEDS_CLARIFICATION_BLOCK}
-
-Rewrite the original input using the AISP analysis. The output should read as an improved version of the original — same scope and intent, but with gaps filled, contradictions resolved, and ambiguity removed.
-Output only the markdown or the NEEDS_CLARIFICATION block. No preamble.`
+  const modeClause = MODE_INSTRUCTIONS[mode]
+    ? ` ${MODE_INSTRUCTIONS[mode]}`
+    : ""
+  return `Translate this AISP to English${modeClause}. Output only the translated text.`
 }
 
 // ── New prompts for purify MCP tools ──────────────────────────────────────────
@@ -429,44 +363,10 @@ export function buildPurifyTurnContent(
   return parts.join("\n\n---\n\n")
 }
 
-// QuestionRequestTurn content: validation summary + question instruction
-export function buildQuestionRequestContent(validationSummary: string): string {
-  return (
-    `${validationSummary}\n\n` +
-    `Generate clarifying questions for the gaps and contradictions above. ` +
-    `Output as a JSON array, no markdown fences:\n` +
-    `[{"priority":"REQUIRED|OPTIONAL","question":"specific answerable question"}]\n\n` +
-    `REQUIRED = blocks meaningful use. OPTIONAL = improves quality. ` +
-    `Binary or multiple-choice preferred. Maximum 7 questions total.`
-  )
-}
-
-// AnswersTurn content: Q&A pairs + refinement instruction
-export function buildAnswersTurnContent(
-  answers: Array<{ question: string; answer: string }>,
-): string {
-  const pairs = answers
-    .map((a, i) => `Q${i + 1}: ${a.question}\nA${i + 1}: ${a.answer}`)
-    .join("\n\n")
-  return (
-    `Answers to clarifying questions:\n\n${pairs}\n\n` +
-    `Update the AISP document to incorporate these answers. Output only the updated AISP document.`
-  )
-}
-
 // TranslateTurn content: output format + translate instruction
 export function buildTranslateTurnContent(format: string): string {
-  return (
-    `${format}\n\n` +
-    `Now rewrite the text from the PRIMARY_SPECIFICATION block (up to END_PRIMARY_SPECIFICATION) using the AISP analysis above. ` +
-    `Match the format and style of that block — not any context files. ` +
-    `The output should read as an improved version of the PRIMARY_SPECIFICATION — ` +
-    `same scope and intent, but with gaps filled, contradictions resolved, ` +
-    `and ambiguity removed. ` +
-    `No hedge words (typically, usually, often, generally, might, may, could, probably). ` +
-    `No preamble. Start with the first section heading. ` +
-    `Output only the rewritten text.`
-  )
+  const modeClause = format ? ` ${format}` : ""
+  return `Translate the AISP to English${modeClause}. Output only the translated text.`
 }
 
 // UpdateTurn content: change description
@@ -505,12 +405,9 @@ export function buildPatchTranslateContent(
   format: string,
 ): string {
   return (
-    `The following AISP blocks were updated. ` +
-    `Translate only these blocks to natural language.\n\n` +
-    `Use the full AISP document (in the system prompt) to resolve any cross-references.\n\n` +
-    `${format}\n\n` +
-    `No hedge words (typically, usually, often, generally). ` +
-    `No preamble. Output only the English translation of the changed blocks.\n\n` +
+    `Translate the following updated AISP blocks to English ${format}. ` +
+    `Use the full AISP document (in the system prompt) to resolve any cross-references. ` +
+    `Output only the English translation of the changed blocks.\n\n` +
     `CHANGED BLOCKS:\n${patchRaw}`
   )
 }

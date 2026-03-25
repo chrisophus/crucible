@@ -13,7 +13,7 @@
  *   --provider   anthropic | openai                        (default: anthropic)
  *   --model      main model (AISP→English)                 (default: provider default)
  *   --purify-model  cheap model (En→AISP)                  (default: haiku / gpt-4o-mini)
- *   --mode       formal | narrative | hybrid | sketch | summary  (default: narrative)
+ *   --mode       formal | input | narrative | hybrid | sketch | summary  (default: formal)
  *   --mode-file  path to a skill markdown file that specifies the mode
  *   --api-key    API key                                    (default: env var)
  *   --verbose    write AISP and scores to stderr
@@ -44,7 +44,6 @@ const { version: PURIFY_VERSION } = require("../package.json") as {
 import Anthropic from "@anthropic-ai/sdk"
 import {
   addContextToSession,
-  runClarifyPipeline,
   runPatchPipeline,
   runPurifyPipeline,
   runTranslatePipeline,
@@ -67,7 +66,6 @@ import type {
   Contradiction,
   Mode,
   Provider,
-  Question,
 } from "./types.ts"
 import { TIER_NAMES } from "./validator.ts"
 
@@ -247,7 +245,7 @@ function parseArgs(argv: string[]) {
     baseUrl: (process.env.OPENAI_BASE_URL ?? null) as string | null,
     openaiUser: (process.env.OPENAI_USER ?? null) as string | null,
     insecure: process.env.OPENAI_INSECURE === "1",
-    mode: (process.env.PURIFY_MODE ?? "narrative") as Mode,
+    mode: (process.env.PURIFY_MODE ?? "formal") as Mode,
     modeFile: (process.env.PURIFY_MODE_FILE ?? null) as string | null,
     verbose: false,
     debug: false,
@@ -415,7 +413,9 @@ Options:
   --context, -c  add a file as reference context (repeatable); e.g. -c style-guide.md -c api-types.ts
   --feedback     author context for one shot (clarifications / extra context); quote for spaces
   --output, -o   write final English to this path (batch: full stdout payload; REPL: last reply on /exit or EOF)
-  --mode         formal|narrative|hybrid|sketch|summary      (default: narrative)
+  --mode         formal|input|narrative|hybrid|sketch|summary (default: formal)
+                 formal: translate the AISP to English
+                 input:  match the style and format of the original input
   --mode-file    path to a skill markdown file that specifies the mode
   --provider     anthropic | openai                          (default: anthropic)
   --model        main model (AISP→English)                   (default: claude-sonnet-4-6)
@@ -486,15 +486,6 @@ Other surfaces:
 `)
 }
 
-type ReplState =
-  | { type: "main" }
-  | {
-      type: "clarify"
-      questions: Question[]
-      answers: string[]
-      sessionId: string
-    }
-
 async function runRepl(opts: {
   provider: Provider
   mainModel: string
@@ -541,18 +532,15 @@ async function runRepl(opts: {
   }
 
   const replConfig: Config = {
-    clarification_mode: "on_low_score",
     contradiction_detection: opts.contradictionDetection,
     external_validation: opts.externalValidation,
     ask_on_contradiction: true,
-    max_clarify_rounds: 2,
     score_threshold: "◊",
   }
 
   let pendingContextFiles: ContextFile[] = []
   let prevSessionId: string | null = null
   let lastAssistantReply: string | null = null
-  let state: ReplState = { type: "main" }
   let buffer: string[] = []
 
   const rl = createInterface({ input: process.stdin })
@@ -594,21 +582,6 @@ async function runRepl(opts: {
       lastAssistantReply = purified
       prevSessionId = result.session_id
       process.stdout.write("\n\n")
-    } else if (result.status === "needs_clarification") {
-      const questions = result.questions!
-      process.stderr.write("\nNEEDS CLARIFICATION\n\n")
-      questions.forEach((q, i) => {
-        process.stderr.write(`${i + 1}. [${q.priority}] ${q.question}\n`)
-      })
-      process.stderr.write(
-        "\nEnter answers (one per line, empty line to submit):\n",
-      )
-      state = {
-        type: "clarify",
-        questions,
-        answers: [],
-        sessionId: result.session_id,
-      }
     } else if (result.status === "has_contradictions") {
       process.stderr.write("\n⚠ contradictions detected:\n")
       result.contradictions!.forEach((c: Contradiction, i: number) => {
@@ -646,171 +619,136 @@ async function runRepl(opts: {
     } catch (err) {
       logError(err)
     }
+    process.stderr.write("➤ ")
   }
 
   process.stderr.write("➤ ")
 
   for await (const line of rl) {
-    if (state.type === "main") {
-      if (line !== "") {
-        buffer.push(line)
-        continue
-      }
+    if (line !== "") {
+      buffer.push(line)
+      continue
+    }
 
-      if (buffer.length === 0) {
-        process.stderr.write("➤ ")
-        continue
-      }
+    if (buffer.length === 0) {
+      process.stderr.write("➤ ")
+      continue
+    }
 
-      if (buffer.length > 1000) {
-        process.stderr.write("⊘ buffer overflow — resetting\n➤ ")
-        buffer = []
-        continue
-      }
-
-      const input = buffer.join("\n")
+    if (buffer.length > 1000) {
+      process.stderr.write("⊘ buffer overflow — resetting\n➤ ")
       buffer = []
+      continue
+    }
 
-      if (input.trim() === "/exit") break
+    const input = buffer.join("\n")
+    buffer = []
 
-      if (input.trim().startsWith("/context ")) {
-        const filePath = input.trim().slice("/context ".length).trim()
-        if (!filePath) {
-          process.stderr.write("error: /context requires a file path\n➤ ")
-          continue
-        }
-        if (!existsSync(filePath)) {
-          process.stderr.write(`error: context file not found: ${filePath}\n➤ `)
-          continue
-        }
-        let fileContent: string
-        try {
-          fileContent = readFileSync(filePath, "utf8")
-        } catch {
-          process.stderr.write(
-            `error: cannot read context file: ${filePath}\n➤ `,
-          )
-          continue
-        }
-        const contextFile = { path: filePath, content: fileContent }
-        if (prevSessionId !== null) {
-          addContextToSession(prevSessionId, [contextFile])
-        } else {
-          pendingContextFiles.push(contextFile)
-        }
+    if (input.trim() === "/exit") break
+
+    if (input.trim().startsWith("/context ")) {
+      const filePath = input.trim().slice("/context ".length).trim()
+      if (!filePath) {
+        process.stderr.write("error: /context requires a file path\n➤ ")
+        continue
+      }
+      if (!existsSync(filePath)) {
+        process.stderr.write(`error: context file not found: ${filePath}\n➤ `)
+        continue
+      }
+      let fileContent: string
+      try {
+        fileContent = readFileSync(filePath, "utf8")
+      } catch {
+        process.stderr.write(`error: cannot read context file: ${filePath}\n➤ `)
+        continue
+      }
+      const contextFile = { path: filePath, content: fileContent }
+      if (prevSessionId !== null) {
+        addContextToSession(prevSessionId, [contextFile])
+      } else {
+        pendingContextFiles.push(contextFile)
+      }
+      process.stderr.write(
+        `✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `,
+      )
+      continue
+    }
+
+    // /patch <section text> — patch a specific section using the current session
+    if (input.startsWith("/patch\n") || input === "/patch") {
+      if (prevSessionId === null) {
         process.stderr.write(
-          `✓ context loaded: ${filePath} (${fileContent.length} chars)\n➤ `,
+          "⊘ /patch requires an active session — purify something first\n➤ ",
         )
         continue
       }
-
-      // /patch <section text> — patch a specific section using the current session
-      if (input.startsWith("/patch\n") || input === "/patch") {
-        if (prevSessionId === null) {
-          process.stderr.write(
-            "⊘ /patch requires an active session — purify something first\n➤ ",
-          )
-          continue
-        }
-        const section = input.startsWith("/patch\n")
-          ? input.slice("/patch\n".length).trim()
-          : ""
-        if (!section) {
-          process.stderr.write(
-            "usage: /patch\\n<changed section text>\\n(empty line)\n➤ ",
-          )
-          continue
-        }
-        process.stderr.write(`→ patching...\n`)
-        try {
-          const result = await runPatchPipeline(
-            prevSessionId,
-            section,
-            undefined,
-            mode,
-            {
-              ...llmOpts,
-              streamTo: process.stdout,
-            },
-          )
-          if (result.status === "has_contradictions") {
-            process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
-            result.contradictions!.forEach((c: Contradiction, i: number) => {
-              process.stderr.write(
-                `${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`,
-              )
-            })
-            process.stderr.write("Resolve the contradictions and resubmit.\n")
-          } else {
-            process.stdout.write("\n\n")
-            lastAssistantReply = result.purified_section ?? null
-          }
-        } catch (err) {
-          logError(err)
-        }
-        process.stderr.write("➤ ")
+      const section = input.startsWith("/patch\n")
+        ? input.slice("/patch\n".length).trim()
+        : ""
+      if (!section) {
+        process.stderr.write(
+          "usage: /patch\\n<changed section text>\\n(empty line)\n➤ ",
+        )
         continue
       }
-
-      process.stderr.write(`→ purifying...\n`)
+      process.stderr.write(`→ patching...\n`)
       try {
-        let result: Awaited<ReturnType<typeof runPurifyPipeline>>
-        if (prevSessionId === null) {
-          const startContextFiles = [
-            ...opts.contextFiles,
-            ...pendingContextFiles,
-          ]
-          pendingContextFiles = []
-          result = await runPurifyPipeline(
-            input,
-            startContextFiles,
-            replConfig,
-            llmOpts,
-            fromAisp,
-          )
+        const result = await runPatchPipeline(
+          prevSessionId,
+          section,
+          undefined,
+          mode,
+          {
+            ...llmOpts,
+            streamTo: process.stdout,
+          },
+        )
+        if (result.status === "has_contradictions") {
+          process.stderr.write("\nCONTRADICTIONS FOUND\n\n")
+          result.contradictions!.forEach((c: Contradiction, i: number) => {
+            process.stderr.write(
+              `${i + 1}. [${c.kind}]\n   ${c.statement_a}\n   vs. ${c.statement_b}\n   ${c.proof}\n\n`,
+            )
+          })
+          process.stderr.write("Resolve the contradictions and resubmit.\n")
         } else {
-          result = await runUpdatePipeline(
-            prevSessionId,
-            input,
-            replConfig,
-            llmOpts,
-          )
+          process.stdout.write("\n\n")
+          lastAssistantReply = result.purified_section ?? null
         }
-        await handleResult(result)
       } catch (err) {
         logError(err)
       }
-      if (state.type === "main") process.stderr.write("➤ ")
-    } else {
-      // clarify mode
-      const cs = state as Extract<ReplState, { type: "clarify" }>
-      if (line !== "") {
-        cs.answers.push(line)
-        continue
-      }
-
-      if (cs.answers.length === 0) {
-        process.stderr.write("➤ ")
-        continue
-      }
-
-      const clarifyState = state as Extract<ReplState, { type: "clarify" }>
-      const answers = clarifyState.questions.map((q, i) => ({
-        question: q.question,
-        answer: clarifyState.answers[i] ?? "",
-      }))
-      const { sessionId } = clarifyState
-      state = { type: "main" }
-
-      process.stderr.write(`→ re-validating...\n`)
-      try {
-        const result = await runClarifyPipeline(sessionId, answers, llmOpts)
-        await handleResult(result)
-      } catch (err) {
-        logError(err)
-      }
-      if (state.type === "main") process.stderr.write("➤ ")
+      process.stderr.write("➤ ")
+      continue
     }
+
+    process.stderr.write(`→ purifying...\n`)
+    try {
+      let result: Awaited<ReturnType<typeof runPurifyPipeline>>
+      if (prevSessionId === null) {
+        const startContextFiles = [...opts.contextFiles, ...pendingContextFiles]
+        pendingContextFiles = []
+        result = await runPurifyPipeline(
+          input,
+          startContextFiles,
+          replConfig,
+          llmOpts,
+          fromAisp,
+        )
+      } else {
+        result = await runUpdatePipeline(
+          prevSessionId,
+          input,
+          replConfig,
+          llmOpts,
+        )
+      }
+      await handleResult(result)
+    } catch (err) {
+      logError(err)
+    }
+    process.stderr.write("➤ ")
   }
 
   if (outputFile && lastAssistantReply !== null) {
@@ -866,11 +804,9 @@ async function runSuggest(opts: {
   }
 
   const batchConfig: Config = {
-    clarification_mode: "never",
     contradiction_detection: opts.contradictionDetection,
     external_validation: opts.externalValidation,
     ask_on_contradiction: false,
-    max_clarify_rounds: 0,
     score_threshold: "◊",
   }
 
@@ -1203,11 +1139,9 @@ async function main() {
   const contextFiles = loadContextFiles(opts.contextFiles)
 
   const batchConfig: Config = {
-    clarification_mode: "never",
     contradiction_detection: opts.contradictionDetection,
     external_validation: opts.externalValidation,
     ask_on_contradiction: false,
-    max_clarify_rounds: 0,
     score_threshold: "◊",
   }
 
