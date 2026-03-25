@@ -3,3 +3,5 @@ dist/
 scratch/
 output/
 coverage.out
+purify-go
+purify-mcp
