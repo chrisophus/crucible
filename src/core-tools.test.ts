@@ -10,6 +10,7 @@ import {
   runTranslatePipeline,
 } from "./core-tools.ts"
 import { getSession } from "./sessions.ts"
+import { DEFAULT_CONFIG } from "./types.ts"
 
 // ── Mocks ──────────────────────────────────────────────────────────────────────
 
@@ -56,15 +57,15 @@ const LLM_OPTS = {
 }
 
 const NEVER_CONFIG = {
+  ...DEFAULT_CONFIG,
   clarification_mode: "never" as const,
-  score_threshold: "◊" as const,
   ask_on_contradiction: false,
   max_clarify_rounds: 0,
 }
 
 const ON_LOW_SCORE_CONFIG = {
+  ...DEFAULT_CONFIG,
   clarification_mode: "on_low_score" as const,
-  score_threshold: "◊" as const,
   ask_on_contradiction: true,
   max_clarify_rounds: 2,
 }
@@ -152,7 +153,11 @@ describe("runPurifyPipeline", () => {
     const result = await runPurifyPipeline(
       "The system is always on and never on.",
       [],
-      { ...NEVER_CONFIG, ask_on_contradiction: true },
+      {
+        ...NEVER_CONFIG,
+        ask_on_contradiction: true,
+        contradiction_detection: "always" as const,
+      },
       LLM_OPTS,
     )
 
@@ -162,13 +167,11 @@ describe("runPurifyPipeline", () => {
   })
 
   it("returns needs_clarification when score is low and mode is on_low_score", async () => {
-    // Return a low validator score
-    mockRunValidator.mockResolvedValue({
-      valid: false,
+    // Return a low self-reported score so contradiction detection and clarification fire
+    mockParseEvidence.mockReturnValue({
       delta: 0.15,
-      tier: "⊘",
-      ambiguity: 0.9,
-      pureDensity: 0.1,
+      tierSymbol: "⊘",
+      tierName: "invalid",
     })
 
     const questions = [
@@ -178,7 +181,7 @@ describe("runPurifyPipeline", () => {
     mockCallLLM.mockImplementation(async (_p, _k, _m, _sys, messages) => {
       const lastMsg = messages[messages.length - 1]
       const content = typeof lastMsg.content === "string" ? lastMsg.content : ""
-      if (content === FAKE_AISP) {
+      if (content.includes("contradiction")) {
         return JSON.stringify({ contradictions: [] })
       }
       if (content.includes("question") || content.includes("clarif")) {
@@ -190,7 +193,10 @@ describe("runPurifyPipeline", () => {
     const result = await runPurifyPipeline(
       "The system should retry.",
       [],
-      ON_LOW_SCORE_CONFIG,
+      {
+        ...ON_LOW_SCORE_CONFIG,
+        contradiction_detection: "on_low_score" as const,
+      },
       LLM_OPTS,
     )
 
@@ -209,9 +215,9 @@ describe("runPurifyPipeline", () => {
       true, // fromAisp
     )
 
-    // Should only call LLM for contradiction detection, not Phase1
+    // No Phase 1 call; contradiction detection skipped (score is high, mode is on_low_score)
     const newCalls = mockCallLLM.mock.calls.length - callCount
-    expect(newCalls).toBe(1) // only contradiction detection
+    expect(newCalls).toBe(0)
     expect(result.status).toBe("ready")
   })
 })

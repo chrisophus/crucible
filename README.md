@@ -13,7 +13,7 @@ The round-trip invariant: `ambiguity(purify(p)) < ambiguity(p)` for every input 
 ## How it works
 
 1. **English → AISP**: your input is translated into AISP 5.1 formal grammar, which forces every constraint into an explicit quantifier, every enumeration to be fully spelled out, and every negation to be stated. Ambiguities that survive fluent prose become visible here.
-2. **Validate**: an independent WASM validator scores the AISP document (δ ∈ [0, 1]) and assigns a quality tier. The validator score is authoritative — LLM self-reported scores are never trusted.
+2. **Score**: the AISP document is scored for semantic density (δ ∈ [0, 1]) and assigned a quality tier. By default the LLM's self-reported scores are used. Pass `--validate` to run the external WASM validator instead, or `--validate` with `on_low_score` to use it only as a fallback when the self-reported score is low.
 3. **Clarify** *(optional)*: if the score is below threshold, the model generates specific questions for the author. Answers are incorporated and the AISP is refined. The model never hallucates answers on the author's behalf.
 4. **AISP → English**: the refined document is translated back to plain English using the full conversation as context.
 
@@ -90,7 +90,12 @@ Five tools implement the session pipeline. Sessions accumulate conversation for 
 {
   "text": "The retry logic should back off exponentially...",
   "context": "<contents of purify.context.md>",
-  "config": { "clarification_mode": "on_low_score", "score_threshold": "◊" }
+  "config": {
+    "clarification_mode": "on_low_score",
+    "contradiction_detection": "on_low_score",
+    "external_validation": "never",
+    "score_threshold": "◊"
+  }
 }
 ```
 
@@ -189,7 +194,7 @@ purify --mode sketch requirements.txt
 CLI output format:
 
 ```
-QUALITY: ◊⁺⁺ platinum (δ=0.91, self_δ=0.85)
+QUALITY: ◊⁺⁺ platinum (δ=0.85, φ=88)
 ---
 <purified English>
 ```
@@ -199,20 +204,27 @@ QUALITY: ◊⁺⁺ platinum (δ=0.91, self_δ=0.85)
 ## CLI Options
 
 ```
---repl       interactive session with prompt caching
---suggest    show purified version then suggest changes to the original
---input, -f  read specification from file
---context, -c  add reference context file (repeatable)
---feedback   one-shot author context; quote for spaces
---output, -o write final English to file
---mode       formal|narrative|hybrid|sketch|summary  (default: narrative)
---formal / --narrative / --hybrid / --sketch / --summary   shorthand mode flags
---provider   anthropic | openai               (default: anthropic)
---model      main model (AISP → English)      (default: claude-sonnet-4-6)
---purify-model  cheap model (En → AISP)       (default: claude-haiku-4-5-20251001)
---api-key    API key                          (default: env var)
---from-aisp  skip step 1 — input is already AISP
---verbose    write AISP intermediate and scores to stderr
+--repl           interactive session with prompt caching
+--suggest        show purified version then suggest changes to the original
+--input, -f      read specification from file
+--context, -c    add reference context file (repeatable)
+--feedback       one-shot author context; quote for spaces
+--output, -o     write final English to file
+--mode           formal|narrative|hybrid|sketch|summary  (default: narrative)
+--formal / --narrative / --hybrid / --sketch / --summary  shorthand mode flags
+--provider       anthropic | openai               (default: anthropic)
+--model          main model (AISP → English)      (default: claude-sonnet-4-6)
+--purify-model   cheap model (En → AISP)          (default: claude-haiku-4-5-20251001)
+--api-key        API key                          (default: env var)
+--from-aisp      skip step 1 — input is already AISP
+--contradictions    always run LLM contradiction detection (slower, more thorough)
+--no-contradictions skip contradiction detection entirely (fastest)
+                    default: run only when score is below threshold
+--validate          always run external WASM validator for scoring
+--no-validate       skip external validator; use LLM self-reported scores only (default)
+--verbose        write AISP intermediate and scores to stderr
+--debug          log every LLM request and response summary to stderr
+--very-verbose   log full request/response content to stderr (implies --debug)
 --version, -v
 --help, -h
 ```

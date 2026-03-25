@@ -252,6 +252,9 @@ function parseArgs(argv: string[]) {
     verbose: false,
     debug: false,
     veryVerbose: false,
+    contradictionDetection:
+      "on_low_score" as import("./types.ts").ContradictionDetection,
+    externalValidation: "never" as import("./types.ts").ExternalValidation,
     fromAisp: false,
     repl: false,
     suggest: false,
@@ -304,6 +307,14 @@ function parseArgs(argv: string[]) {
     } else if (a === "--very-verbose") {
       opts.veryVerbose = true
       opts.debug = true
+    } else if (a === "--contradictions") {
+      opts.contradictionDetection = "always"
+    } else if (a === "--no-contradictions") {
+      opts.contradictionDetection = "never"
+    } else if (a === "--validate") {
+      opts.externalValidation = "always"
+    } else if (a === "--no-validate") {
+      opts.externalValidation = "never"
     } else if (a === "--from-aisp") {
       opts.fromAisp = true
     } else if (a === "--repl") {
@@ -419,6 +430,12 @@ Options:
   --from-aisp    skip step 1 — input is already AISP
   --thinking     enable extended thinking for Step 3 (Anthropic Sonnet/Opus only)
   --estimate     count input tokens for Step 1 and exit without calling the main model
+  --contradictions    always run LLM contradiction detection (slower but thorough)
+  --no-contradictions skip contradiction detection entirely
+                      default: run only when score is below threshold
+  --validate          always run external WASM validator
+  --no-validate       skip external validator entirely (default)
+                      default: use LLM self-reported scores only
   --verbose      write AISP and scores to stderr
   --debug        log every LLM request and response to stderr (errors always logged)
   --very-verbose log full request/response content grouped by type (implies --debug)
@@ -486,6 +503,8 @@ async function runRepl(opts: {
   verbose: boolean
   debug: boolean
   veryVerbose: boolean
+  contradictionDetection: import("./types.ts").ContradictionDetection
+  externalValidation: import("./types.ts").ExternalValidation
   mode: Mode
   fromAisp: boolean
   baseUrl: string | null
@@ -523,6 +542,8 @@ async function runRepl(opts: {
 
   const replConfig: Config = {
     clarification_mode: "on_low_score",
+    contradiction_detection: opts.contradictionDetection,
+    external_validation: opts.externalValidation,
     ask_on_contradiction: true,
     max_clarify_rounds: 2,
     score_threshold: "◊",
@@ -807,6 +828,8 @@ async function runSuggest(opts: {
   verbose: boolean
   debug: boolean
   veryVerbose: boolean
+  contradictionDetection: import("./types.ts").ContradictionDetection
+  externalValidation: import("./types.ts").ExternalValidation
   mode: Mode
   fromAisp: boolean
   inputFile: string | null
@@ -844,6 +867,8 @@ async function runSuggest(opts: {
 
   const batchConfig: Config = {
     clarification_mode: "never",
+    contradiction_detection: opts.contradictionDetection,
+    external_validation: opts.externalValidation,
     ask_on_contradiction: false,
     max_clarify_rounds: 0,
     score_threshold: "◊",
@@ -1015,6 +1040,8 @@ async function main() {
       verbose: opts.verbose,
       debug: opts.debug,
       veryVerbose: opts.veryVerbose,
+      contradictionDetection: opts.contradictionDetection,
+      externalValidation: opts.externalValidation,
       mode: opts.mode,
       fromAisp: opts.fromAisp,
       baseUrl: opts.baseUrl,
@@ -1111,6 +1138,8 @@ async function main() {
       verbose: opts.verbose,
       debug: opts.debug,
       veryVerbose: opts.veryVerbose,
+      contradictionDetection: opts.contradictionDetection,
+      externalValidation: opts.externalValidation,
       mode: opts.mode,
       fromAisp: opts.fromAisp,
       inputFile: opts.inputFile,
@@ -1175,6 +1204,8 @@ async function main() {
 
   const batchConfig: Config = {
     clarification_mode: "never",
+    contradiction_detection: opts.contradictionDetection,
+    external_validation: opts.externalValidation,
     ask_on_contradiction: false,
     max_clarify_rounds: 0,
     score_threshold: "◊",

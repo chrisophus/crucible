@@ -220,19 +220,49 @@ async function computeValidationResult(
     debug?: boolean
     veryVerbose?: boolean
   },
+  contradictionDetection: import("./types.ts").ContradictionDetection = "on_low_score",
+  externalValidation: import("./types.ts").ExternalValidation = "never",
+  scoreThreshold: import("./types.ts").QualityTier = "◊",
 ): Promise<PipelineValidationResult> {
   const selfReport = parseEvidence(aisp)
   const phi = parsePhi(aisp)
 
-  const [validatorResult, contradictions] = await Promise.all([
-    runValidator(aisp),
-    detectContradictions(aisp, provider, apiKey, cheapModel, llmOpts),
-  ])
+  // External validator: gate on configured mode using self-reported score for "on_low_score".
+  const selfDelta = selfReport.delta ?? 0
+  const selfTau = computeTier(selfDelta, phi)
+  const shouldRunValidator =
+    externalValidation === "always" ||
+    (externalValidation === "on_low_score" &&
+      tierBelow(selfTau, scoreThreshold))
 
-  const delta = validatorResult?.delta ?? selfReport.delta ?? 0
-  const tau = computeTier(delta, phi)
+  const validatorResult = shouldRunValidator ? await runValidator(aisp) : null
+  const delta = validatorResult?.delta ?? selfDelta
+  const tau = validatorResult ? computeTier(delta, phi) : selfTau
   const scores: Scores = { delta, phi, tau }
   const gaps = computeGaps(validatorResult, scores)
+
+  // Contradiction detection is an LLM call — gate it on the configured mode.
+  let contradictions: Contradiction[] = []
+  if (contradictionDetection === "always") {
+    contradictions = await detectContradictions(
+      aisp,
+      provider,
+      apiKey,
+      cheapModel,
+      llmOpts,
+    )
+  } else if (contradictionDetection === "on_low_score") {
+    if (tierBelow(tau, scoreThreshold)) {
+      contradictions = await detectContradictions(
+        aisp,
+        provider,
+        apiKey,
+        cheapModel,
+        llmOpts,
+      )
+    }
+  }
+  // "never" → contradictions stays []
 
   return { scores, contradictions, gaps }
 }
@@ -528,6 +558,9 @@ export async function runPurifyPipeline(
       debug: resolved.debug,
       veryVerbose: resolved.veryVerbose,
     },
+    session.config.contradiction_detection,
+    session.config.external_validation,
+    session.config.score_threshold,
   )
 
   const phase3 = await runPhase3(session, validation, resolved)
@@ -576,6 +609,9 @@ export async function runClarifyPipeline(
       debug: resolved.debug,
       veryVerbose: resolved.veryVerbose,
     },
+    session.config.contradiction_detection,
+    session.config.external_validation,
+    session.config.score_threshold,
   )
 
   const phase3 = await runPhase3(session, validation, resolved)
@@ -666,6 +702,9 @@ export async function runUpdatePipeline(
       debug: resolved.debug,
       veryVerbose: resolved.veryVerbose,
     },
+    newSession.config.contradiction_detection,
+    newSession.config.external_validation,
+    newSession.config.score_threshold,
   )
 
   const phase3 = await runPhase3(newSession, validation, resolved)
