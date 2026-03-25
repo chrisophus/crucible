@@ -31,9 +31,9 @@ describe("MODE_INSTRUCTIONS", () => {
     expect(MODE_INSTRUCTIONS.formal).toBe("")
   })
 
-  it("input mode instructs to use same style as input", () => {
+  it("input mode instructs to match original specification's style", () => {
     expect(MODE_INSTRUCTIONS.input).toBe(
-      "in the same style and format as the input",
+      "matching the original specification's style and format",
     )
   })
 
@@ -64,10 +64,10 @@ describe("getToEnglishSystem", () => {
     )
   })
 
-  it("input mode appends input style instruction", () => {
+  it("input mode appends original specification style instruction", () => {
     const prompt = getToEnglishSystem("input")
     expect(prompt).toBe(
-      "Translate this AISP to English in the same style and format as the input. Output only the translated text.",
+      "Translate this AISP to English matching the original specification's style and format. Output only the translated text.",
     )
   })
 
@@ -170,7 +170,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.input
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English in the same style and format as the input. Output only the translated text.",
+      "Translate the AISP to English matching the original specification's style and format. Output only the translated text.",
     )
   })
 
@@ -264,9 +264,11 @@ describe("getReplSystem", () => {
     expect(system).toContain("supporting tables or lists")
   })
 
-  it("input mode includes input style instruction", () => {
+  it("input mode includes original specification style instruction", () => {
     const system = getReplSystem("input")
-    expect(system).toContain("in the same style and format as the input")
+    expect(system).toContain(
+      "matching the original specification's style and format",
+    )
   })
 
   it("sketch mode includes sketch instruction", () => {
