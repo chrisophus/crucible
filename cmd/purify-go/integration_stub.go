@@ -27,6 +27,7 @@ func translateAndPrint(
 	_ context.Context,
 	result *types.PurifyRunResult,
 	f cliFlags,
+	_ string,
 	_ pipeline.Deps,
 ) error {
 	if result.Status == types.StatusHasContradictions {

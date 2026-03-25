@@ -459,7 +459,7 @@ func TestScanLines_EOF(t *testing.T) {
 func TestNewLLM_Anthropic(t *testing.T) {
 	t.Parallel()
 
-	llm := newLLM(types.ProviderAnthropic, "key", "model", "")
+	llm := newLLM(types.ProviderAnthropic, "key", "model", "", llmOpts{})
 	if llm == nil {
 		t.Fatal("expected non-nil LLM")
 	}
@@ -468,7 +468,7 @@ func TestNewLLM_Anthropic(t *testing.T) {
 func TestNewLLM_OpenAI(t *testing.T) {
 	t.Parallel()
 
-	llm := newLLM(types.ProviderOpenAI, "key", "model", "https://example.com")
+	llm := newLLM(types.ProviderOpenAI, "key", "model", "https://example.com", llmOpts{})
 	if llm == nil {
 		t.Fatal("expected non-nil LLM")
 	}
@@ -477,9 +477,24 @@ func TestNewLLM_OpenAI(t *testing.T) {
 func TestNewLLM_Default(t *testing.T) {
 	t.Parallel()
 
-	llm := newLLM("unknown", "key", "model", "")
+	llm := newLLM("unknown", "key", "model", "", llmOpts{})
 	if llm == nil {
 		t.Fatal("expected non-nil LLM for unknown provider (defaults to anthropic)")
+	}
+}
+
+func TestNewLLM_WithOpts(t *testing.T) {
+	t.Parallel()
+
+	opts := llmOpts{OpenAIUser: "testuser", Insecure: true, Thinking: true}
+	llm := newLLM(types.ProviderAnthropic, "key", "model", "", opts)
+	if llm == nil {
+		t.Fatal("expected non-nil LLM with opts")
+	}
+
+	llm = newLLM(types.ProviderOpenAI, "key", "model", "https://example.com", opts)
+	if llm == nil {
+		t.Fatal("expected non-nil OpenAI LLM with opts")
 	}
 }
 
@@ -492,9 +507,12 @@ func TestBuildDeps(t *testing.T) {
 		CheapModel: "claude-haiku-4-5-20251001",
 		APIKey:     "test-key",
 	}
-	deps := buildDeps(resolved)
+	deps := buildDeps(resolved, llmOpts{Thinking: true}, "some feedback")
 	if deps.MainLLM == nil || deps.CheapLLM == nil || deps.Store == nil {
 		t.Fatal("expected all deps to be non-nil")
+	}
+	if deps.Feedback != "some feedback" {
+		t.Errorf("expected feedback %q, got %q", "some feedback", deps.Feedback)
 	}
 }
 
@@ -577,7 +595,7 @@ func TestTranslateAndPrint_Contradictions(t *testing.T) {
 			{Kind: "unsatisfiable_conjunction", Question: "Q1"},
 		},
 	}
-	err := translateAndPrint(context.Background(), result, cliFlags{}, pipeline.Deps{})
+	err := translateAndPrint(context.Background(), result, cliFlags{}, "", pipeline.Deps{})
 	_ = w.Close()
 	os.Stdout = old
 

@@ -9,16 +9,17 @@ import (
 	"github.com/chrisophus/crucible/internal/types"
 )
 
-// runPhase1 translates English to AISP using the cheap model.
-func runPhase1(
+// runPhase1WithFeedback translates English to AISP, with optional author feedback.
+func runPhase1WithFeedback(
 	ctx context.Context,
 	sess *types.Session,
 	text string,
 	cheapLLM provider.LLM,
 	store *session.Store,
 	ctxFiles []types.ContextFile,
+	feedback string,
 ) (string, error) {
-	userContent := prompt.BuildPurifyTurnContent(text, ctxFiles)
+	userContent := prompt.BuildPurifyTurnContentWithFeedback(text, ctxFiles, feedback)
 	sess.Messages = append(sess.Messages, types.ConvMessage{
 		Role:    "user",
 		Content: userContent,

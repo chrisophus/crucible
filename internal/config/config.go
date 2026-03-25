@@ -19,6 +19,8 @@ type LLMOpts struct {
 	Model      string
 	CheapModel string
 	BaseURL    string
+	OpenAIUser string
+	Insecure   bool
 }
 
 // ResolvedOpts holds fully resolved LLM configuration.
@@ -28,6 +30,8 @@ type ResolvedOpts struct {
 	CheapModel string
 	APIKey     string
 	BaseURL    string
+	OpenAIUser string
+	Insecure   bool
 }
 
 // Resolve fills in defaults and environment variables.
@@ -46,7 +50,9 @@ func Resolve(opts LLMOpts) (ResolvedOpts, error) {
 		MainModel:  mainModel,
 		CheapModel: cheapModel,
 		APIKey:     apiKey,
-		BaseURL:    opts.BaseURL,
+		BaseURL:    resolveBaseURL(opts.BaseURL),
+		OpenAIUser: resolveOpenAIUser(opts.OpenAIUser),
+		Insecure:   resolveInsecure(opts.Insecure),
 	}, nil
 }
 
@@ -84,6 +90,30 @@ func resolveCheapModel(model string, prov types.Provider) string {
 	}
 
 	return provider.DefaultCheapModels[prov]
+}
+
+func resolveBaseURL(baseURL string) string {
+	if baseURL != "" {
+		return baseURL
+	}
+
+	return os.Getenv("OPENAI_BASE_URL")
+}
+
+func resolveOpenAIUser(user string) string {
+	if user != "" {
+		return user
+	}
+
+	return os.Getenv("OPENAI_USER")
+}
+
+func resolveInsecure(insecure bool) bool {
+	if insecure {
+		return true
+	}
+
+	return os.Getenv("OPENAI_INSECURE") == "1"
 }
 
 func resolveAPIKey(key string, prov types.Provider) (string, error) {
