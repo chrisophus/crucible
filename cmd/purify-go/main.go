@@ -369,26 +369,46 @@ func loadContextFiles(paths []string) ([]types.ContextFile, error) {
 	return files, nil
 }
 
-func buildDeps(resolved config.ResolvedOpts) pipeline.Deps {
-	mainLLM := newLLM(resolved.Provider, resolved.APIKey, resolved.MainModel, resolved.BaseURL)
-	cheapLLM := newLLM(resolved.Provider, resolved.APIKey, resolved.CheapModel, resolved.BaseURL)
+// llmOpts holds options for constructing LLM providers.
+type llmOpts struct {
+	OpenAIUser string
+	Insecure   bool
+	Thinking   bool
+}
+
+func buildDeps(resolved config.ResolvedOpts, opts llmOpts, feedback string) pipeline.Deps {
+	mainOpts := opts
+	cheapOpts := opts
+	// Thinking only applies to the main model (Phase 4 translation)
+	cheapOpts.Thinking = false
+
+	mainLLM := newLLM(resolved.Provider, resolved.APIKey, resolved.MainModel, resolved.BaseURL, mainOpts)
+	cheapLLM := newLLM(resolved.Provider, resolved.APIKey, resolved.CheapModel, resolved.BaseURL, cheapOpts)
 
 	return pipeline.Deps{
 		MainLLM:  mainLLM,
 		CheapLLM: cheapLLM,
 		Store:    session.NewStore(),
+		Feedback: feedback,
 	}
 }
 
-func newLLM(prov types.Provider, apiKey, model, baseURL string) provider.LLM {
+func newLLM(prov types.Provider, apiKey, model, baseURL string, opts llmOpts) provider.LLM {
 	switch prov {
 	case types.ProviderOpenAI:
-		return provider.NewOpenAI(apiKey, model, baseURL)
+		return provider.NewOpenAIWithOpts(apiKey, model, baseURL, provider.OpenAIOpts{
+			User:     opts.OpenAIUser,
+			Insecure: opts.Insecure,
+		})
 	case types.ProviderAnthropic:
-		return provider.NewAnthropic(apiKey, model)
+		return provider.NewAnthropicWithOpts(apiKey, model, provider.AnthropicOpts{
+			Thinking: opts.Thinking,
+		})
 	}
 
-	return provider.NewAnthropic(apiKey, model)
+	return provider.NewAnthropicWithOpts(apiKey, model, provider.AnthropicOpts{
+		Thinking: opts.Thinking,
+	})
 }
 
 func eprint(msg string, verbose bool) {

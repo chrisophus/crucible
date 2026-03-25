@@ -29,14 +29,25 @@ func FormatContextBlocks(files []types.ContextFile) string {
 
 // BuildPurifyTurnContent builds the user turn for Phase 1.
 func BuildPurifyTurnContent(text string, ctxFiles []types.ContextFile) string {
+	return BuildPurifyTurnContentWithFeedback(text, ctxFiles, "")
+}
+
+// BuildPurifyTurnContentWithFeedback builds the user turn for Phase 1, with
+// optional author feedback/context appended.
+func BuildPurifyTurnContentWithFeedback(text string, ctxFiles []types.ContextFile, feedback string) string {
 	var parts []string
 
 	if len(ctxFiles) > 0 {
 		parts = append(parts, "CONTEXT FILES\n\n"+FormatContextBlocks(ctxFiles))
 	}
 
-	spec := "PRIMARY_SPECIFICATION\n\n" + text + "\n\nEND_PRIMARY_SPECIFICATION\n\n" +
-		"Translate the PRIMARY_SPECIFICATION block above to AISP 5.1. " +
+	spec := "PRIMARY_SPECIFICATION\n\n" + text + "\n\nEND_PRIMARY_SPECIFICATION"
+
+	if feedback != "" {
+		spec += "\n\nAUTHOR_CONTEXT\n\n" + feedback + "\n\nEND_AUTHOR_CONTEXT"
+	}
+
+	spec += "\n\nTranslate the PRIMARY_SPECIFICATION block above to AISP 5.1. " +
 		"Translate only that block — not any context files. " +
 		"Output only the AISP document."
 	parts = append(parts, spec)

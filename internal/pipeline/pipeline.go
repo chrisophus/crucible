@@ -15,6 +15,7 @@ type Deps struct {
 	MainLLM  provider.LLM
 	CheapLLM provider.LLM
 	Store    *session.Store
+	Feedback string // optional author context/feedback for Phase 1
 }
 
 // RunPurify executes Phases 1-3 and returns a run result.
@@ -51,13 +52,13 @@ func runPurifyPhase1(
 	fromAISP bool,
 ) error {
 	if fromAISP {
-		seedFromAISP(sess, text, ctxFiles, deps.Store)
+		seedFromAISP(sess, text, ctxFiles, deps.Store, deps.Feedback)
 		return nil
 	}
 
 	files := resolveCtxFiles(ctxFiles)
 
-	_, err := runPhase1(ctx, sess, text, deps.CheapLLM, deps.Store, files)
+	_, err := runPhase1WithFeedback(ctx, sess, text, deps.CheapLLM, deps.Store, files, deps.Feedback)
 
 	return err
 }
@@ -75,6 +76,7 @@ func seedFromAISP(
 	text string,
 	ctxFiles []types.ContextFile,
 	store *session.Store,
+	feedback string,
 ) {
 	sess.AISPCurrent = text
 
@@ -82,7 +84,7 @@ func seedFromAISP(
 	sess.Messages = append(sess.Messages,
 		types.ConvMessage{
 			Role:    "user",
-			Content: prompt.BuildPurifyTurnContent(text, files),
+			Content: prompt.BuildPurifyTurnContentWithFeedback(text, files, feedback),
 		},
 		types.ConvMessage{Role: "assistant", Content: text},
 	)

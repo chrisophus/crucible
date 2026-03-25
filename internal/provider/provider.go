@@ -10,8 +10,11 @@ import (
 
 // CallOpts configures a single LLM call.
 type CallOpts struct {
-	StreamTo io.Writer
-	BaseURL  string
+	StreamTo    io.Writer
+	BaseURL     string
+	Debug       bool
+	VeryVerbose bool
+	Thinking    bool
 }
 
 // LLM is the interface for language model providers.
