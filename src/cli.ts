@@ -250,6 +250,8 @@ function parseArgs(argv: string[]) {
     mode: (process.env.PURIFY_MODE ?? "narrative") as Mode,
     modeFile: (process.env.PURIFY_MODE_FILE ?? null) as string | null,
     verbose: false,
+    debug: false,
+    veryVerbose: false,
     fromAisp: false,
     repl: false,
     suggest: false,
@@ -297,6 +299,11 @@ function parseArgs(argv: string[]) {
       opts.outputFile = p
     } else if (a === "--verbose") {
       opts.verbose = true
+    } else if (a === "--debug") {
+      opts.debug = true
+    } else if (a === "--very-verbose") {
+      opts.veryVerbose = true
+      opts.debug = true
     } else if (a === "--from-aisp") {
       opts.fromAisp = true
     } else if (a === "--repl") {
@@ -413,6 +420,8 @@ Options:
   --thinking     enable extended thinking for Step 3 (Anthropic Sonnet/Opus only)
   --estimate     count input tokens for Step 1 and exit without calling the main model
   --verbose      write AISP and scores to stderr
+  --debug        log every LLM request and response to stderr (errors always logged)
+  --very-verbose log full request/response content grouped by type (implies --debug)
   --version, -v
   --help, -h
 
@@ -445,6 +454,8 @@ Examples:
   purify --repl -c style-guide.md
   purify -f spec.md --feedback "focus on the auth section"
   purify -f spec.md --verbose 2>aisp_debug.md
+  purify -f spec.md --debug 2>llm_trace.log
+  purify -f spec.md --very-verbose 2>full_trace.log
   purify "add a status field" -c style-guide.md -c api-types.ts
 
 Patch workflow (large specs):
@@ -473,6 +484,8 @@ async function runRepl(opts: {
   purifyModel: string
   apiKey: string
   verbose: boolean
+  debug: boolean
+  veryVerbose: boolean
   mode: Mode
   fromAisp: boolean
   baseUrl: string | null
@@ -504,6 +517,8 @@ async function runRepl(opts: {
     baseUrl: baseUrl ?? undefined,
     openaiUser: openaiUser ?? undefined,
     insecure,
+    debug: opts.debug,
+    veryVerbose: opts.veryVerbose,
   }
 
   const replConfig: Config = {
@@ -790,6 +805,8 @@ async function runSuggest(opts: {
   purifyModel: string
   apiKey: string
   verbose: boolean
+  debug: boolean
+  veryVerbose: boolean
   mode: Mode
   fromAisp: boolean
   inputFile: string | null
@@ -821,6 +838,8 @@ async function runSuggest(opts: {
     baseUrl: baseUrl ?? undefined,
     openaiUser: openaiUser ?? undefined,
     insecure,
+    debug: opts.debug,
+    veryVerbose: opts.veryVerbose,
   }
 
   const batchConfig: Config = {
@@ -930,6 +949,8 @@ async function runSuggest(opts: {
           baseUrl: baseUrl ?? undefined,
           openaiUser: openaiUser ?? undefined,
           insecure,
+          debug: opts.debug,
+          veryVerbose: opts.veryVerbose,
         },
       )
 
@@ -992,6 +1013,8 @@ async function main() {
       purifyModel,
       apiKey,
       verbose: opts.verbose,
+      debug: opts.debug,
+      veryVerbose: opts.veryVerbose,
       mode: opts.mode,
       fromAisp: opts.fromAisp,
       baseUrl: opts.baseUrl,
@@ -1032,6 +1055,8 @@ async function main() {
       baseUrl: opts.baseUrl ?? undefined,
       openaiUser: opts.openaiUser ?? undefined,
       insecure: opts.insecure,
+      debug: opts.debug,
+      veryVerbose: opts.veryVerbose,
     }
     try {
       const result = await runPatchPipeline(
@@ -1084,6 +1109,8 @@ async function main() {
       purifyModel,
       apiKey,
       verbose: opts.verbose,
+      debug: opts.debug,
+      veryVerbose: opts.veryVerbose,
       mode: opts.mode,
       fromAisp: opts.fromAisp,
       inputFile: opts.inputFile,
@@ -1161,6 +1188,8 @@ async function main() {
     baseUrl: opts.baseUrl ?? undefined,
     openaiUser: opts.openaiUser ?? undefined,
     insecure: opts.insecure,
+    debug: opts.debug,
+    veryVerbose: opts.veryVerbose,
   }
 
   try {
