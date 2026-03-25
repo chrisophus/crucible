@@ -95,7 +95,7 @@ Translate the following to AISP. Output only the AISP document.`
 
 export const MODE_INSTRUCTIONS: Record<Mode, string> = {
   formal: "",
-  input: "matching the original specification's style and format",
+  input: "matching the style and format of the PRIMARY_SPECIFICATION block",
   narrative: "as a narrative",
   hybrid:
     "as a narrative with supporting tables or lists for structured detail",
