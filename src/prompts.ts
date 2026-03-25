@@ -168,7 +168,7 @@ export function getToEnglishSystem(mode: Mode): string {
   const modeClause = MODE_INSTRUCTIONS[mode]
     ? ` ${MODE_INSTRUCTIONS[mode]}`
     : ""
-  return `Translate this AISP to English${modeClause}. Output only the translated text.`
+  return `Translate the AISP_DOCUMENT to English${modeClause}. Output only the translated text.`
 }
 
 // ── New prompts for purify MCP tools ──────────────────────────────────────────
@@ -318,7 +318,7 @@ export function getReplSystem(mode: Mode): string {
     `\n\n\
 You are in an interactive refinement session. \
 Maintain continuity with the conversation history — when the user refines or \
-extends a spec, integrate the changes and return the complete current specification. \
+extends a spec, integrate the changes and return the complete current AISP document. \
 Each user message is an AISP document representing their intent.`
   )
 }
@@ -329,7 +329,7 @@ Each user message is an AISP document representing their intent.`
 // Stable for the full session lifetime — never varies by context.
 // Domain context is injected as explicit conversation turns instead.
 export function getSessionSystemPrompt(): string {
-  return AISP_SPEC
+  return `AISP_SPECIFICATION\n\n${AISP_SPEC}\n\nEND_AISP_SPECIFICATION`
 }
 
 // Format context files into FILE_CONTEXT blocks.
@@ -364,9 +364,10 @@ export function buildPurifyTurnContent(
 }
 
 // TranslateTurn content: output format + translate instruction
+// Note: The AISP_DOCUMENT is in the preceding conversation turn(s), not the AISP_SPECIFICATION in the system prompt.
 export function buildTranslateTurnContent(format: string): string {
   const modeClause = format ? ` ${format}` : ""
-  return `Translate the AISP to English${modeClause}. Output only the translated text.`
+  return `Translate the AISP_DOCUMENT from the conversation above to English${modeClause}. Output only the translated text.`
 }
 
 // UpdateTurn content: change description

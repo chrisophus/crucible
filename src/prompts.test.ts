@@ -60,42 +60,42 @@ describe("getToEnglishSystem", () => {
   it("formal mode produces base prompt with no modifier", () => {
     const prompt = getToEnglishSystem("formal")
     expect(prompt).toBe(
-      "Translate this AISP to English. Output only the translated text.",
+      "Translate the AISP_DOCUMENT to English. Output only the translated text.",
     )
   })
 
   it("input mode appends PRIMARY_SPECIFICATION style instruction", () => {
     const prompt = getToEnglishSystem("input")
     expect(prompt).toBe(
-      "Translate this AISP to English matching the style and format of the PRIMARY_SPECIFICATION block. Output only the translated text.",
+      "Translate the AISP_DOCUMENT to English matching the style and format of the PRIMARY_SPECIFICATION block. Output only the translated text.",
     )
   })
 
   it("narrative mode appends narrative instruction", () => {
     const prompt = getToEnglishSystem("narrative")
     expect(prompt).toBe(
-      "Translate this AISP to English as a narrative. Output only the translated text.",
+      "Translate the AISP_DOCUMENT to English as a narrative. Output only the translated text.",
     )
   })
 
   it("hybrid mode appends table instruction", () => {
     const prompt = getToEnglishSystem("hybrid")
     expect(prompt).toBe(
-      "Translate this AISP to English as a narrative with supporting tables or lists for structured detail. Output only the translated text.",
+      "Translate the AISP_DOCUMENT to English as a narrative with supporting tables or lists for structured detail. Output only the translated text.",
     )
   })
 
   it("sketch mode appends sketch instruction", () => {
     const prompt = getToEnglishSystem("sketch")
     expect(prompt).toBe(
-      "Translate this AISP to English as a sketch. Output only the translated text.",
+      "Translate the AISP_DOCUMENT to English as a sketch. Output only the translated text.",
     )
   })
 
   it("summary mode appends summary instruction", () => {
     const prompt = getToEnglishSystem("summary")
     expect(prompt).toBe(
-      "Translate this AISP to English as a summary. Output only the translated text.",
+      "Translate the AISP_DOCUMENT to English as a summary. Output only the translated text.",
     )
   })
 
@@ -114,7 +114,7 @@ describe("getToEnglishSystem", () => {
     }
   })
 
-  it("all modes start with Translate this AISP to English", () => {
+  it("all modes start with Translate the AISP_DOCUMENT to English", () => {
     const modes: Mode[] = [
       "formal",
       "input",
@@ -125,7 +125,7 @@ describe("getToEnglishSystem", () => {
     ]
     for (const mode of modes) {
       const prompt = getToEnglishSystem(mode)
-      expect(prompt).toMatch(/^Translate this AISP to English/)
+      expect(prompt).toMatch(/^Translate the AISP_DOCUMENT to English/)
     }
   })
 })
@@ -134,7 +134,7 @@ describe("buildTranslateTurnContent", () => {
   it("produces base prompt when format is empty", () => {
     const content = buildTranslateTurnContent("")
     expect(content).toBe(
-      "Translate the AISP to English. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English. Output only the translated text.",
     )
   })
 
@@ -146,7 +146,7 @@ describe("buildTranslateTurnContent", () => {
   it("appends format when provided", () => {
     const content = buildTranslateTurnContent("as a narrative")
     expect(content).toBe(
-      "Translate the AISP to English as a narrative. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English as a narrative. Output only the translated text.",
     )
   })
 
@@ -154,7 +154,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.formal
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English. Output only the translated text.",
     )
   })
 
@@ -162,7 +162,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.narrative
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English as a narrative. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English as a narrative. Output only the translated text.",
     )
   })
 
@@ -170,7 +170,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.input
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English matching the style and format of the PRIMARY_SPECIFICATION block. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English matching the style and format of the PRIMARY_SPECIFICATION block. Output only the translated text.",
     )
   })
 
@@ -178,7 +178,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.hybrid
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English as a narrative with supporting tables or lists for structured detail. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English as a narrative with supporting tables or lists for structured detail. Output only the translated text.",
     )
   })
 
@@ -186,7 +186,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.sketch
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English as a sketch. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English as a sketch. Output only the translated text.",
     )
   })
 
@@ -194,7 +194,7 @@ describe("buildTranslateTurnContent", () => {
     const format = MODE_INSTRUCTIONS.summary
     const content = buildTranslateTurnContent(format)
     expect(content).toBe(
-      "Translate the AISP to English as a summary. Output only the translated text.",
+      "Translate the AISP_DOCUMENT from the conversation above to English as a summary. Output only the translated text.",
     )
   })
 
@@ -214,7 +214,7 @@ describe("buildTranslateTurnContent", () => {
     }
   })
 
-  it("all modes start with Translate the AISP to English", () => {
+  it("all modes start with Translate the AISP_DOCUMENT from the conversation", () => {
     const modes: Mode[] = [
       "formal",
       "input",
@@ -226,7 +226,9 @@ describe("buildTranslateTurnContent", () => {
     for (const mode of modes) {
       const format = MODE_INSTRUCTIONS[mode]
       const content = buildTranslateTurnContent(format)
-      expect(content).toMatch(/^Translate the AISP to English/)
+      expect(content).toMatch(
+        /^Translate the AISP_DOCUMENT from the conversation/,
+      )
     }
   })
 })
@@ -248,9 +250,9 @@ describe("getReplSystem", () => {
 
   it("formal mode has no mode modifier in base", () => {
     const system = getReplSystem("formal")
-    expect(system).toContain("Translate this AISP to English.")
+    expect(system).toContain("Translate the AISP_DOCUMENT to English.")
     expect(system).not.toMatch(
-      /Translate this AISP to English (as a|in the same|sketch|summary)/,
+      /Translate the AISP_DOCUMENT to English (as a|in the same|sketch|summary)/,
     )
   })
 
@@ -320,10 +322,10 @@ describe("mode consistency", () => {
       } else {
         // formal mode: no modifier
         expect(system).toBe(
-          "Translate this AISP to English. Output only the translated text.",
+          "Translate the AISP_DOCUMENT to English. Output only the translated text.",
         )
         expect(turn).toBe(
-          "Translate the AISP to English. Output only the translated text.",
+          "Translate the AISP_DOCUMENT from the conversation above to English. Output only the translated text.",
         )
       }
     }
