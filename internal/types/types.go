@@ -186,6 +186,29 @@ type PurifyRunResult struct {
 	Scores         *Scores         `json:"scores,omitempty"`
 }
 
+// AispBlock represents a parsed AISP block from a patch response.
+type AispBlock struct {
+	Name    string `json:"name"`
+	Version int    `json:"version"`
+	Delta   string `json:"delta"`
+	Body    string `json:"body"`
+}
+
+// PatchResult is the output of the purify_patch pipeline.
+type PatchResult struct {
+	SessionID       string          `json:"session_id"`
+	Status          PipelineStatus  `json:"status"`
+	AISPPatch       []AispBlock     `json:"aisp_patch"`
+	PurifiedSection string          `json:"purified_section,omitempty"`
+	Contradictions  []Contradiction `json:"contradictions,omitempty"`
+}
+
+// InitResult is the output of the purify_init pipeline.
+type InitResult struct {
+	ContextFile string `json:"context_file"`
+	Summary     string `json:"summary"`
+}
+
 // PipelineValidationResult holds validation phase output.
 type PipelineValidationResult struct {
 	Scores         Scores          `json:"scores"`
