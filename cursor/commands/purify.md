@@ -1,12 +1,11 @@
 ---
 description: >-
   Purify a spec via AISP 5.1 — generate AISP from the implicit context or from the spec the user is referring to,
-  score with aisp-validator CLI (authoritative δ/tier), ask clarifying questions
-  if needed, then output plain English. Does not use the purify CLI or purify MCP.
+  ask clarifying questions if needed, then update the source in English.
   Invoke with inline text, a file path, or leave empty to use editor selection / ask.
 ---
 
-# /purify-spec
+# /purify
 
 The user **explicitly invoked this command**. Run the full pipeline below. Do not treat this as background guidance; execute it now for the input in **User input**.
 
@@ -28,32 +27,20 @@ The user **explicitly invoked this command**. Run the full pipeline below. Do no
 ### 2. Score (authoritative)
 
 1. Save the AISP to a file in the workspace in scratch/
-2. Run:
 
-   ```bash
-   npx --yes aisp-validator@latest validate <file> --json
-   ```
-
-   Optionally: `tier`, `density`, `debug` from the same CLI.
-
-3. **Trust CLI output** for **δ** and **tier**. Align **⟦Ε⟧** with those results.
-4. If Node/`npx` is unavailable, state that and give a **non-authoritative** estimate; still clarify weak specs.
+2. Review the evidence section:
 
 **Tiers:** ◊⁺⁺ (δ≥0.75), ◊⁺ (≥0.60), ◊ (≥0.40), ◊⁻ (≥0.20), ⊘ (<0.20 or invalid).
 
 **Default gate:** do not produce final English if **⊘** or **δ < 0.40**, unless the user says otherwise.
 
-### 3. Contradictions
+### 3. Clarify
 
-Briefly check for conflicting rules, unreachable states, or clashing ownership; surface in plain English before or with questions.
+If the gate fails: output specific questions (prefer binary / multiple-choice). No final purified prose yet. After answers, merge into AISP and repeat §2.
 
-### 4. Clarify
+### 4. AISP → English (deliverable)
 
-If the gate fails: output **`NEEDS_CLARIFICATION`** with ≤**4** specific questions (prefer binary / multiple-choice). No final purified prose yet. After answers, merge into AISP and repeat §2.
-
-### 5. AISP → English (deliverable)
-
-When the gate passes: output **markdown only**, **no AISP symbols**. Output in the usual style and format for the context, don't follow the AISP format for the English translation.
+When the gate passes: update the content that was translated to AISP from the AISP document. Make the updates by finding differences between the AISP and the source. The goal is to "purify" the source with the AISP.
 
 ---
 
